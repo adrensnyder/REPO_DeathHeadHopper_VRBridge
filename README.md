@@ -3,7 +3,7 @@
 Add VR support, through RepoXR, to DeathHeadHopper mod 2.1.8.
 
 ## How it works
-- Camera control is detached from the movement joystick and tied to whichever grip you’ve configured (default Auto keeps it on the grip opposite your selected main hand, but you can force Left or Right) so you can aim jumps without turning the view.
+- Camera control is detached from the movement joystick and tied to whichever grip you've configured (default Auto keeps it on the grip opposite your selected main hand, but you can force Left or Right) so you can aim jumps without turning the view.
 - To activate the ability, hold that configured grip and press the VR Actions/ResetHeight action (Quest binding shown in the current feature flags).
 - This bridge is developed and tested on Meta Quest, so bindings may differ on other headsets and should be verified.
 
