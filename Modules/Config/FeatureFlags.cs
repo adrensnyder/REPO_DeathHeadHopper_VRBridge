@@ -4,8 +4,17 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 {
     internal static class FeatureFlags
     {
-        [FeatureConfigEntry("Spectate Movement", "Defines the forward vector used to rotate jump direction; Controller uses the tracked left-hand controller, Head uses the HMD.", AcceptableValues = new[] { "Controller", "Head" })]
-        public static string MovementDirectionSource = "Controller";
+        [FeatureConfigEntry("Spectate Movement", "Defines the forward vector used to rotate jump direction; Controller/Head use raw planar forward, HeadRaycast/ControllerRaycast use first hit from POV then head->hit projected on the horizontal plane.", AcceptableValues = new[] { "Controller", "Head", "HeadRaycast", "ControllerRaycast" })]
+        public static string MovementDirectionSource = "ControllerRaycast";
+
+        [FeatureConfigEntry("Spectate Movement", "Maximum distance (meters) for POV raycasts used by HeadRaycast/ControllerRaycast movement sources.", Min = 2f, Max = 200f)]
+        public static float MovementRaycastDistance = 40f;
+
+        [FeatureConfigEntry("Spectate Movement", "Render the RepoXR ray line for ControllerRaycast while spectating the head.")]
+        public static bool ShowControllerRayLine = true;
+
+        [FeatureConfigEntry("Spectate Movement", "When using ControllerRaycast, ignore small horizontal stick drift while pushing forward/backward.", Min = 0f, Max = 0.5f)]
+        public static float ControllerRaycastXAxisDeadzone = 0.2f;
 
         [FeatureConfigEntry("Spectate Camera", "Distance that the spectator camera stays behind the death head.", Min = 0.05f, Max = 1.5f)]
         public static float HeadCameraDistance = 0.45f;
@@ -16,8 +25,14 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate Camera", "How fast the spectator camera lerps back to the default position.", Min = 1f, Max = 12f)]
         public static float HeadCameraLerpSpeed = 8f;
 
-        [FeatureConfigEntry("Spectate VR Ability", "Defines which forward vector is used to aim DeathHeadHopper abilities; Controller uses the tracked hand, Head uses the HMD.", AcceptableValues = new[] { "Controller", "Head" })]
-        public static string AbilityDirectionSource = "Controller";
+        [FeatureConfigEntry("Spectate VR Ability", "Defines how DeathHeadHopper abilities are aimed: Controller/Head use raw forward, HeadRaycast/ControllerRaycast cast from POV to first hit and then aim from head to that point.", AcceptableValues = new[] { "Controller", "Head", "HeadRaycast", "ControllerRaycast" })]
+        public static string AbilityDirectionSource = "ControllerRaycast";
+
+        [FeatureConfigEntry("Spectate VR Ability", "Maximum distance (meters) for the POV raycast used by HeadRaycast/ControllerRaycast.", Min = 2f, Max = 200f)]
+        public static float AbilityRaycastDistance = 60f;
+
+        [FeatureConfigEntry("Spectate VR Ability", "When true, POV raycast direction is flattened to the horizon plane before tracing.")]
+        public static bool AbilityRaycastUseHorizon = false;
 
         [FeatureConfigEntry("Spectate VR Ability", "Hand used to hold the grip that activates the spectate ability cursor. Valid values: Auto (opposite the selected main hand in RepoXR), Left, Right.", AcceptableValues = new[] { "Auto", "Left", "Right" })]
         public static string AbilityGripPreference = "Auto";
@@ -43,19 +58,10 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate VR Ability", "Enable verbose logging for the vanilla ability bridge (rate-limited).")]
         public static bool DebugAbility = false;
 
-        //[FeatureConfigEntry("Spectate VR Ability", "Enable the bridge that maps stick-clicks onto the vanilla DeathHeadHopper slots.")]
         public static bool EnableVanillaAbilityBridge = true;
-
-        //[FeatureConfigEntry("Spectate Movement", "Enable verbose SpectateCamera debug logs (guard activations, LateUpdate entry).")]
         public static bool DebugSpectateGuard = false;
-
-        //[FeatureConfigEntry("Spectate Movement", "Log movement direction math and forward vector when spectating head.")]
         public static bool DebugMovementDirection = false;
-
-        //[FeatureConfigEntry("Spectate Movement", "Log the tracked controller forward/rotation when MovementDirectionSource=Controller and the stick is held.")]
         public static bool LogControllerOrientation = false;
-
-        //[FeatureConfigEntry("Spectate Movement", "Enable verbose logs for the spectate head alignment helpers when DeathHeadHopper spectating is active.")]
         public static bool DebugHeadAlignment = false;
 
         [FeatureConfigEntry("Spectate Movement", "Hand used to hold the grip that controls camera look/movement while spectating. Valid values: Auto (opposite the selected main hand in RepoXR), Left, Right.", AcceptableValues = new[] { "Auto", "Left", "Right" })]
@@ -63,7 +69,5 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
         [FeatureConfigEntry("Spectate Movement", "When true, scale the jump direction by the analog stick magnitude instead of always normalizing to 1.")]
         public static bool UseAnalogMagnitude = true;
-
-        
     }
 }
