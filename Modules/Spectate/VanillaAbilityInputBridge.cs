@@ -9,6 +9,7 @@ using DeathHeadHopper.UI;
 using DeathHeadHopperVRBridge.Modules.Config;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using BepInEx.Logging;
 using DeathHeadHopperVRBridge.Modules.Logging;
 
@@ -24,6 +25,11 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             RepoXRActionsType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static);
         private static readonly PropertyInfo? RepoXRActionsIndexer =
             RepoXRActionsType?.GetProperty("Item", new[] { typeof(string) });
+        private static readonly Type? RepoXRInputSystemType = AccessTools.TypeByName("RepoXR.Input.VRInputSystem");
+        private static readonly PropertyInfo? RepoXRInputSystemInstance =
+            RepoXRInputSystemType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static);
+        private static readonly PropertyInfo? RepoXRInputSystemActions =
+            RepoXRInputSystemType?.GetProperty("Actions", BindingFlags.Public | BindingFlags.Instance);
 
         private static readonly Type? InputActionType = AccessTools.TypeByName("UnityEngine.InputSystem.InputAction");
         private static readonly MethodInfo? WasPressedMethod =
@@ -44,6 +50,16 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         private static readonly MethodInfo? HasEquippedAbilityMethod =
             AccessTools.Method(typeof(DHHAbilityManager), "HasEquippedAbility");
         private static readonly FieldInfo? BackgroundIconField = AccessTools.Field(typeof(AbilitySpot), "backgroundIcon");
+        private static readonly string[] FallbackActivateActionNames =
+        {
+            "VR Actions/ResetHeight",
+            "VR Actions/Grab",
+            "VR Actions/Interact",
+            "VR Actions/Push",
+            "VR Actions/Movement",
+            "VR Actions/Turn",
+            "ResetHeight"
+        };
 
         internal static readonly ManualLogSource Log = BepInEx.Logging.Logger.CreateLogSource("DeathHeadHopperFix-VR.VanillaAbility");
         internal const string ModuleTag = "[DeathHeadHopperFix-VR] [VanillaAbility]";
@@ -54,6 +70,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         private object? _activeAction;
         private Quaternion? _savedAvatarRotation;
         private const int PrimarySlotIndex = 0;
+        private const int DirectionSlotIndex = 1;
 
         public static void EnsureAttached(GameObject host)
         {
@@ -82,7 +99,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            if (!TryPreparePrimarySpot(out var spots, out var primarySpot))
+            if (!TryPrepareSpots(out var spots))
             {
                 ReleaseAbility();
                 return;
@@ -90,15 +107,14 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
             var gripActive = SpectateHeadBridge.IsGripPressedForAbility();
             LogDebug("ListeningInputs", gripActive
-                ? "Listening for the primary ability slot while DeathHeadHopper is active and the configured ability grip is held."
-                : "Waiting for the configured ability grip before reacting to the primary ability slot.");
-            HandleActivation(primarySpot!, gripActive);
+                ? "Listening for slot 1/slot 2 ability actions while DeathHeadHopper is active and the configured ability grip is held."
+                : "Waiting for the configured ability grip before reacting to slot 1/slot 2 ability actions.");
+            HandleActivation(spots!, gripActive);
         }
 
-        private bool TryPreparePrimarySpot(out AbilitySpot[]? spots, out AbilitySpot? primarySpot)
+        private bool TryPrepareSpots(out AbilitySpot[]? spots)
         {
             spots = null;
-            primarySpot = null;
             var manager = GetAbilityManager();
             if (manager == null)
             {
@@ -116,48 +132,38 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return false;
             }
 
-            var spot = GetAbilitySpot(spots, PrimarySlotIndex);
-            if (spot == null || spot.CurrentAbility == null)
+            var primarySpot = GetAbilitySpot(spots, PrimarySlotIndex);
+            var directionSpot = GetAbilitySpot(spots, DirectionSlotIndex);
+            if ((primarySpot == null || primarySpot.CurrentAbility == null)
+                && (directionSpot == null || directionSpot.CurrentAbility == null))
             {
-                LogDebug("PrimarySlotMissing", "Primary ability slot is empty while DeathHeadHopper is active.");
+                LogDebug("AbilitySlotsMissing", "Slot 1 and slot 2 are empty while DeathHeadHopper is active.");
                 return false;
             }
 
-            primarySpot = spot;
             return true;
         }
 
-        private void HandleActivation(AbilitySpot spot, bool allowStart)
+        private void HandleActivation(AbilitySpot[] spots, bool allowStart)
         {
-            var actionNames = ParseActionNames(FeatureFlags.AbilityActivateAction).ToArray();
-            var action = GetFirstAvailableAction(actionNames);
-            if (action == null)
-            {
-                ReleaseAbility();
-                LogDebug("ActivateActionMissing", $"Activate action not found ({string.Join(", ", actionNames)})");
-                return;
-            }
+            var slot1Spot = GetAbilitySpot(spots, PrimarySlotIndex);
+            var slot2Spot = GetAbilitySpot(spots, DirectionSlotIndex);
 
-            LogDebug("ActivateActionReady", $"Activate action ready ({string.Join(", ", actionNames)}). Primary slot index={PrimarySlotIndex}");
-
-            if (allowStart && WasActionPressed(action))
-            {
-                LogDebug("ActivateActionTriggered", "Left stick click (L3) triggered activation for the primary slot while DeathHeadHopper is active.");
-                ReleaseAbility();
-
-                AlignAvatarToCamera();
-                InvokeAbilityMethod(HandleInputDownMethod, spot);
-                _slotDownSpot = spot;
-                _activeAction = action;
-                LogDebug("AbilityStart", $"Started primary ability slot {PrimarySlotIndex} ({spot.CurrentAbility?.GetType().Name ?? "none"})");
-            }
+            // Resolve each input action only for slots that currently have an equipped ability.
+            // This bridge reads input state and never consumes/cancels the underlying action.
+            var slot1Action = (slot1Spot != null && slot1Spot.CurrentAbility != null)
+                ? ResolveAction(FeatureFlags.AbilityActivateAction, "ActivateAction", "slot 1", PrimarySlotIndex)
+                : null;
+            var slot2Action = (slot2Spot != null && slot2Spot.CurrentAbility != null)
+                ? ResolveAction(FeatureFlags.AbilityDirectionAction, "DirectionAction", "slot 2", DirectionSlotIndex)
+                : null;
 
             if (_slotDownSpot != null && _activeAction != null)
             {
                 if (IsActionPressed(_activeAction))
                 {
                     InvokeAbilityMethod(HandleInputHoldMethod, _slotDownSpot);
-                    LogDebug("AbilityHold", $"Holding primary ability slot {PrimarySlotIndex} ({_slotDownSpot.CurrentAbility?.GetType().Name ?? "none"})", 0.5f);
+                    LogDebug("AbilityHold", $"Holding active ability slot ({_slotDownSpot.CurrentAbility?.GetType().Name ?? "none"})", 0.5f);
                 }
 
                 if (WasActionReleased(_activeAction))
@@ -165,6 +171,47 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                     ReleaseAbility();
                 }
             }
+
+            if (!allowStart)
+            {
+                return;
+            }
+
+            if (slot1Spot != null && slot1Spot.CurrentAbility != null && slot1Action != null && WasActionPressed(slot1Action))
+            {
+                LogDebug("ActivateActionTriggered", "Configured activate action triggered direct activation of slot 1 while DeathHeadHopper is active.");
+                StartAbility(slot1Spot, slot1Action, PrimarySlotIndex);
+            }
+            else if (slot2Spot != null && slot2Spot.CurrentAbility != null && slot2Action != null && WasActionPressed(slot2Action))
+            {
+                LogDebug("DirectionActionTriggered", "Configured direction action triggered activation for slot 2 while DeathHeadHopper is active.");
+                StartAbility(slot2Spot, slot2Action, DirectionSlotIndex);
+            }
+        }
+
+        private object? ResolveAction(string rawConfig, string keyPrefix, string slotLabel, int slotIndex)
+        {
+            var actionNames = BuildActivateActionCandidates(rawConfig);
+            var action = GetFirstAvailableAction(actionNames, out var selectedActionName);
+            if (action == null)
+            {
+                LogDebug($"{keyPrefix}Missing",
+                    $"Action not found for {slotLabel}. Config='{rawConfig}'. Tried={string.Join(", ", actionNames.Take(12))}");
+                return null;
+            }
+
+            LogDebug($"{keyPrefix}Ready", $"Action ready for {slotLabel}: {selectedActionName}. Slot index={slotIndex}");
+            return action;
+        }
+
+        private void StartAbility(AbilitySpot spot, object action, int slotIndex)
+        {
+            ReleaseAbility();
+            AlignAvatarToCamera();
+            InvokeAbilityMethod(HandleInputDownMethod, spot);
+            _slotDownSpot = spot;
+            _activeAction = action;
+            LogDebug("AbilityStart", $"Started ability slot {slotIndex} ({spot.CurrentAbility?.GetType().Name ?? "none"})");
         }
 
         private void ReleaseAbility()
@@ -258,13 +305,94 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
         }
 
-        private static object? GetFirstAvailableAction(IEnumerable<string> names)
+        private static IReadOnlyList<string> BuildActivateActionCandidates(string rawConfig)
         {
+            var names = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string candidate)
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    return;
+                }
+
+                var trimmed = candidate.Trim();
+                if (trimmed.Length == 0 || !seen.Add(trimmed))
+                {
+                    return;
+                }
+
+                names.Add(trimmed);
+            }
+
+            foreach (var configured in ParseActionNames(rawConfig))
+            {
+                Add(configured);
+            }
+
+            foreach (var discovered in DiscoverRepoXRActionNames())
+            {
+                Add(discovered);
+            }
+
+            foreach (var fallback in FallbackActivateActionNames)
+            {
+                Add(fallback);
+            }
+
+            return names;
+        }
+
+        private static IEnumerable<string> DiscoverRepoXRActionNames()
+        {
+            object? inputSystem = null;
+            InputActionAsset? inputActions = null;
+
+            try
+            {
+                inputSystem = RepoXRInputSystemInstance?.GetValue(null);
+                inputActions = RepoXRInputSystemActions?.GetValue(inputSystem) as InputActionAsset;
+            }
+            catch
+            {
+                yield break;
+            }
+
+            if (inputActions == null)
+            {
+                yield break;
+            }
+
+            foreach (var map in inputActions.actionMaps)
+            {
+                var mapName = map.name ?? string.Empty;
+                foreach (var action in map.actions)
+                {
+                    var actionName = action.name;
+                    if (string.IsNullOrWhiteSpace(actionName))
+                    {
+                        continue;
+                    }
+
+                    yield return actionName;
+                    if (!string.IsNullOrWhiteSpace(mapName))
+                    {
+                        yield return mapName + "/" + actionName;
+                    }
+                }
+            }
+        }
+
+        private static object? GetFirstAvailableAction(IEnumerable<string> names, out string selectedName)
+        {
+            selectedName = string.Empty;
             foreach (var name in names)
             {
                 var action = GetAction(name);
                 if (action != null)
                 {
+                    selectedName = name;
                     return action;
                 }
             }

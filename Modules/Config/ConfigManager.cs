@@ -3,9 +3,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using BepInEx.Configuration;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace DeathHeadHopperVRBridge.Modules.Config
 {
@@ -117,7 +119,8 @@ namespace DeathHeadHopperVRBridge.Modules.Config
                 if (field.FieldType == typeof(string))
                 {
                     var defaultValue = field.GetValue(null) as string ?? string.Empty;
-                    var entry = config.Bind(section, key, defaultValue, BuildStringDescription(description, attribute.AcceptableValues));
+                    var acceptableValues = ResolveAcceptableValues(key, attribute.AcceptableValues);
+                    var entry = config.Bind(section, key, defaultValue, BuildStringDescription(description, acceptableValues));
                     ApplyAndWatch(entry, value => field.SetValue(null, value));
                     continue;
                 }
@@ -267,6 +270,127 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             }
 
             return new ConfigDescription(description, new AcceptableValueList<string>(acceptableValues));
+        }
+
+        private static string[] ResolveAcceptableValues(string key, string[] configuredValues)
+        {
+            if (!string.Equals(key, nameof(FeatureFlags.AbilityActivateAction), StringComparison.Ordinal)
+                && !string.Equals(key, nameof(FeatureFlags.AbilityDirectionAction), StringComparison.Ordinal))
+            {
+                return configuredValues ?? Array.Empty<string>();
+            }
+
+            var discoveredValues = DiscoverRepoXRActionNames().ToArray();
+            if (discoveredValues.Length == 0)
+            {
+                return configuredValues ?? Array.Empty<string>();
+            }
+
+            var merged = new List<string>(discoveredValues.Length + (configuredValues?.Length ?? 0));
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddRange(IEnumerable<string> values)
+            {
+                foreach (var value in values)
+                {
+                    if (string.IsNullOrWhiteSpace(value))
+                    {
+                        continue;
+                    }
+
+                    var trimmed = value.Trim();
+                    if (trimmed.Length == 0 || !seen.Add(trimmed))
+                    {
+                        continue;
+                    }
+
+                    merged.Add(trimmed);
+                }
+            }
+
+            AddRange(discoveredValues);
+            AddRange(configuredValues ?? Array.Empty<string>());
+            return merged.ToArray();
+        }
+
+        private static IEnumerable<string> DiscoverRepoXRActionNames()
+        {
+            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var asset in EnumerateRepoXRInputAssets())
+            {
+                if (asset == null)
+                {
+                    continue;
+                }
+
+                foreach (var map in asset.actionMaps)
+                {
+                    var mapName = map.name ?? string.Empty;
+                    foreach (var action in map.actions)
+                    {
+                        var actionName = action.name;
+                        if (string.IsNullOrWhiteSpace(actionName))
+                        {
+                            continue;
+                        }
+
+                        results.Add(actionName);
+                        if (!string.IsNullOrWhiteSpace(mapName))
+                        {
+                            results.Add(mapName + "/" + actionName);
+                        }
+                    }
+                }
+            }
+
+            return results;
+        }
+
+        private static IEnumerable<InputActionAsset> EnumerateRepoXRInputAssets()
+        {
+            var assetCollectionType = FindLoadedType("RepoXR.Assets.AssetCollection");
+            if (assetCollectionType == null)
+            {
+                yield break;
+            }
+
+            foreach (var propertyName in new[] { "VRInputs", "DefaultXRActions" })
+            {
+                InputActionAsset? asset = null;
+                try
+                {
+                    var property = assetCollectionType.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Static);
+                    asset = property?.GetValue(null) as InputActionAsset;
+                }
+                catch
+                {
+                    asset = null;
+                }
+
+                if (asset != null)
+                {
+                    yield return asset;
+                }
+            }
+        }
+
+        private static Type? FindLoadedType(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName))
+            {
+                return null;
+            }
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(fullName, throwOnError: false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            return null;
         }
 
         private static int DetermineIntStep(FeatureConfigEntryAttribute attribute)

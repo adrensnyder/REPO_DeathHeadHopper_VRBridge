@@ -12,7 +12,7 @@ namespace DeathHeadHopperVRBridge
     [BepInDependency("Cronchy.DeathHeadHopper")]
     [BepInDependency("AdrenSnyder.DeathHeadHopperFix")]
     [BepInDependency("io.daxcess.repoxr")]
-    [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.0")]
+    [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.1")]
     public sealed class Plugin : BaseUnityPlugin
     {
         private Harmony? _harmony;

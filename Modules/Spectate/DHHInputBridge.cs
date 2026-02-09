@@ -102,10 +102,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             var forward = MovementDirection switch
             {
-                MovementDirectionSource.Head => SpectateHeadBridge.GetAlignedForward(),
-                MovementDirectionSource.HeadRaycast => GetRaycastAimForward(false, GetCameraGripSelection(), true, Mathf.Max(1f, FeatureFlags.MovementRaycastDistance), true),
-                MovementDirectionSource.ControllerRaycast => GetRaycastAimForward(true, GetCameraGripSelection(), true, Mathf.Max(1f, FeatureFlags.MovementRaycastDistance), false),
-                _ => GetControllerForward(input)
+                MovementDirectionSource.HeadRaycast => GetRaycastAimForward(false, GetCameraGripSelection(), true, Mathf.Max(1f, FeatureFlags.MovementRaycastDistance), false),
+                _ => GetRaycastAimForward(true, GetCameraGripSelection(), true, Mathf.Max(1f, FeatureFlags.MovementRaycastDistance), false),
             };
 
             return forward.sqrMagnitude < 0.0001f ? SpectateHeadBridge.GetBaseForward() : forward;
@@ -146,10 +144,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             var forward = AbilityDirection switch
             {
-                AbilityDirectionSource.Head => GetHeadAimForward(),
                 AbilityDirectionSource.HeadRaycast => GetRaycastAimForward(false, GetAbilityGripSelection(), false, Mathf.Max(1f, FeatureFlags.AbilityRaycastDistance), FeatureFlags.AbilityRaycastUseHorizon),
-                AbilityDirectionSource.ControllerRaycast => GetRaycastAimForward(true, GetAbilityGripSelection(), false, Mathf.Max(1f, FeatureFlags.AbilityRaycastDistance), FeatureFlags.AbilityRaycastUseHorizon),
-                _ => GetControllerAimForward(),
+                _ => GetRaycastAimForward(true, GetAbilityGripSelection(), false, Mathf.Max(1f, FeatureFlags.AbilityRaycastDistance), FeatureFlags.AbilityRaycastUseHorizon),
             };
 
             return forward.sqrMagnitude < 0.0001f ? SpectateHeadBridge.GetAlignedForward() : forward.normalized;
@@ -213,7 +209,12 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 SetRepoXRRayVisibility(FeatureFlags.ShowControllerRayLine && SpectateHeadBridge.IsSpectatingHead());
             }
 
-            var direction = head == null ? ray.direction : (targetPoint - head.transform.position);
+            // DHH-style movement adapted to raycast target:
+            // treat the target point as a "virtual camera origin" and invert the usual camera-forward logic,
+            // so pushing forward moves the head toward the selected target point.
+            var direction = head == null
+                ? ray.direction
+                : GetHeadToTargetDirection(head.transform.position, targetPoint);
             if (projectToHorizontal)
             {
                 direction = Vector3.ProjectOnPlane(direction, Vector3.up);
@@ -225,6 +226,12 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             return direction.normalized;
+        }
+
+        private static Vector3 GetHeadToTargetDirection(Vector3 headPosition, Vector3 targetPoint)
+        {
+            var direction = targetPoint - headPosition;
+            return direction.sqrMagnitude < 0.0001f ? Vector3.zero : direction.normalized;
         }
 
         internal static void UpdateRealtimeControllerRayPreview()
@@ -429,38 +436,54 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private static MovementDirectionSource ParseMovementDirection()
         {
-            var source = FeatureFlags.MovementDirectionSource;
+            var source = (FeatureFlags.MovementDirectionSource ?? string.Empty).Trim();
+            if (source.Equals("Controller", StringComparison.OrdinalIgnoreCase))
+            {
+                return MovementDirectionSource.ControllerRaycast;
+            }
+
+            if (source.Equals("Head", StringComparison.OrdinalIgnoreCase))
+            {
+                return MovementDirectionSource.HeadRaycast;
+            }
+
             if (Enum.TryParse(source, true, out MovementDirectionSource parsed))
             {
                 return parsed;
             }
 
-            return MovementDirectionSource.Controller;
+            return MovementDirectionSource.ControllerRaycast;
         }
 
         private static AbilityDirectionSource ParseAbilityDirection()
         {
-            var source = FeatureFlags.AbilityDirectionSource;
+            var source = (FeatureFlags.AbilityDirectionSource ?? string.Empty).Trim();
+            if (source.Equals("Controller", StringComparison.OrdinalIgnoreCase))
+            {
+                return AbilityDirectionSource.ControllerRaycast;
+            }
+
+            if (source.Equals("Head", StringComparison.OrdinalIgnoreCase))
+            {
+                return AbilityDirectionSource.HeadRaycast;
+            }
+
             if (Enum.TryParse(source, true, out AbilityDirectionSource parsed))
             {
                 return parsed;
             }
 
-            return AbilityDirectionSource.Head;
+            return AbilityDirectionSource.ControllerRaycast;
         }
 
         internal enum MovementDirectionSource
         {
-            Controller,
-            Head,
             HeadRaycast,
             ControllerRaycast
         }
 
         internal enum AbilityDirectionSource
         {
-            Controller,
-            Head,
             HeadRaycast,
             ControllerRaycast
         }

@@ -5,7 +5,7 @@
 		<OutputType>Library</OutputType>
 		<AssemblyName>DeathHeadHopperVRBridge</AssemblyName>
 		<RootNamespace>DeathHeadHopperVRBridge</RootNamespace>
-		<Version>0.1.0</Version>
+		<Version>0.1.1</Version>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<LangVersion>latest</LangVersion>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -112,15 +112,15 @@
 		<PackageReference Include="System.Memory" Version="4.5.5" />
 	</ItemGroup>
 	
-	<Target Name="PostBuildThunderstoreManifest" AfterTargets="PostBuildEvent" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge')">
-		<Copy SourceFiles="$(TargetPath)" DestinationFolder="Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge" />
+	<Target Name="PostBuildThunderstoreManifest" AfterTargets="PostBuildEvent" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\plugins\')">
+		<Copy SourceFiles="$(TargetPath)" DestinationFolder="Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\plugins\" />
 		<Message Text="Copied $(TargetFileName) to Thunderstore manifest folder" Importance="high" />
 	</Target>
 
-	<!--<Target Name="PostBuildThunderstoreZip" AfterTargets="Build" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge')">
+	<Target Name="PostBuildThunderstoreZip" AfterTargets="Build" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge')">
 		<Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path 'Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\*' -DestinationPath 'Thunderstore\$(ThunderstoreZipFileName)' -Force&quot;" />
 		<Message Text="Created Thunderstore\$(ThunderstoreZipFileName)" Importance="high" />
-	</Target>-->
+	</Target>
 
 </Project>
 
