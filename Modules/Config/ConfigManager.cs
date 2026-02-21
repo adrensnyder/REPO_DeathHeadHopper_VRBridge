@@ -1,13 +1,12 @@
 #nullable enable
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Reflection;
 using BepInEx.Configuration;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 namespace DeathHeadHopperVRBridge.Modules.Config
 {
@@ -25,21 +24,39 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         public string Key { get; set; } = string.Empty;
         public float Min { get; set; } = float.NaN;
         public float Max { get; set; } = float.NaN;
-        public float Step { get; set; } = float.NaN;
-        public string[] AcceptableValues { get; set; } = Array.Empty<string>();
+        public string[]? Options { get; set; }
+        public bool HostControlled { get; set; } = true;
 
         public bool HasRange => !float.IsNaN(Min) && !float.IsNaN(Max);
     }
 
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]
+    internal sealed class FeatureConfigAliasAttribute : Attribute
+    {
+        public FeatureConfigAliasAttribute(string oldSection, string oldKey)
+        {
+            OldSection = oldSection ?? string.Empty;
+            OldKey = oldKey ?? string.Empty;
+        }
+
+        public string OldSection { get; }
+        public string OldKey { get; }
+    }
+
     internal static class ConfigManager
     {
-        private struct RangeF { public float Min, Max, Step; }
-        private struct RangeI { public int Min, Max, Step; }
+        private struct RangeF { public float Min, Max; }
+        private struct RangeI { public int Min, Max; }
 
         private static bool s_initialized;
         private static readonly char[] ColorSeparators = { ',', ';' };
         private static readonly Dictionary<string, RangeF> s_floatRanges = new(StringComparer.Ordinal);
         private static readonly Dictionary<string, RangeI> s_intRanges = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, FieldInfo> s_hostControlledFields = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, string> s_hostRuntimeOverrides = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, string> s_localHostControlledBaseline = new(StringComparer.Ordinal);
+
+        internal static event Action? HostControlledChanged;
 
         internal static void Initialize(ConfigFile config)
         {
@@ -50,6 +67,8 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
             s_initialized = true;
             BindConfigEntries(config, typeof(FeatureFlags), "General");
+            ConfigMigrationManager.Apply(config, typeof(FeatureFlags), "General");
+            CaptureLocalHostControlledBaseline();
         }
 
         private static void BindConfigEntries(ConfigFile config, Type targetType, string defaultSection)
@@ -64,13 +83,16 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
                 var section = string.IsNullOrWhiteSpace(attribute.Section) ? defaultSection : attribute.Section;
                 var key = string.IsNullOrWhiteSpace(attribute.Key) ? field.Name : attribute.Key;
+                var rangeKey = BuildRangeKey(section, key);
                 var description = attribute.Description ?? string.Empty;
 
                 if (field.FieldType == typeof(bool))
                 {
                     var defaultValue = (bool)field.GetValue(null)!;
-                    var entry = config.Bind(section, key, defaultValue, description);
-                    ApplyAndWatch(entry, value => field.SetValue(null, value));
+                    var entry = config.Bind(section, key, defaultValue,
+                        new ConfigDescription(description, new AcceptableValueList<bool>(false, true)));
+                    RegisterHostControlledField(attribute, key, field);
+                    ApplyAndWatch(entry, rangeKey, value => field.SetValue(null, value), attribute.HostControlled);
                     continue;
                 }
 
@@ -84,14 +106,15 @@ namespace DeathHeadHopperVRBridge.Modules.Config
                         var max = GetIntRangeEnd(attribute);
                         entry = config.Bind(section, key, defaultValue,
                             new ConfigDescription(description, new AcceptableValueRange<int>(min, max)));
-                        RegisterIntRange(key, min, max, DetermineIntStep(attribute));
+                        RegisterIntRange(rangeKey, min, max);
                     }
                     else
                     {
                         entry = config.Bind(section, key, defaultValue, description);
                     }
 
-                    ApplyAndWatch(entry, value => field.SetValue(null, value));
+                    ApplyAndWatch(entry, rangeKey, value => field.SetValue(null, value), attribute.HostControlled);
+                    RegisterHostControlledField(attribute, key, field);
                     continue;
                 }
 
@@ -105,23 +128,33 @@ namespace DeathHeadHopperVRBridge.Modules.Config
                         var max = Math.Max(attribute.Min, attribute.Max);
                         entry = config.Bind(section, key, defaultValue,
                             new ConfigDescription(description, new AcceptableValueRange<float>(min, max)));
-                        RegisterFloatRange(key, min, max, DetermineFloatStep(attribute, min));
+                        RegisterFloatRange(rangeKey, min, max);
                     }
                     else
                     {
                         entry = config.Bind(section, key, defaultValue, description);
                     }
 
-                    ApplyAndWatch(entry, value => field.SetValue(null, value));
+                    ApplyAndWatch(entry, rangeKey, value => field.SetValue(null, value), attribute.HostControlled);
+                    RegisterHostControlledField(attribute, key, field);
                     continue;
                 }
 
                 if (field.FieldType == typeof(string))
                 {
                     var defaultValue = field.GetValue(null) as string ?? string.Empty;
-                    var acceptableValues = ResolveAcceptableValues(key, attribute.AcceptableValues);
-                    var entry = config.Bind(section, key, defaultValue, BuildStringDescription(description, acceptableValues));
-                    ApplyAndWatch(entry, value => field.SetValue(null, value));
+                    ConfigEntry<string> entry;
+                    if (attribute.Options != null && attribute.Options.Length > 0)
+                    {
+                        entry = config.Bind(section, key, defaultValue,
+                            new ConfigDescription(description, new AcceptableValueList<string>(attribute.Options)));
+                    }
+                    else
+                    {
+                        entry = config.Bind(section, key, defaultValue, description);
+                    }
+                    RegisterHostControlledField(attribute, key, field);
+                    ApplyAndWatch(entry, rangeKey, value => field.SetValue(null, value), attribute.HostControlled);
                     continue;
                 }
 
@@ -129,7 +162,8 @@ namespace DeathHeadHopperVRBridge.Modules.Config
                 {
                     var defaultValue = (Color)field.GetValue(null)!;
                     var entry = config.Bind(section, key, ColorToString(defaultValue), description);
-                    ApplyAndWatch(entry, ColorFromString, value => field.SetValue(null, value));
+                    RegisterHostControlledField(attribute, key, field);
+                    ApplyAndWatch(entry, ColorFromString, value => field.SetValue(null, value), attribute.HostControlled);
                     continue;
                 }
             }
@@ -161,7 +195,7 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             return Math.Abs(value - truncated) < float.Epsilon;
         }
 
-        private static void ApplyAndWatch<T>(ConfigEntry<T> entry, Action<T> setter)
+        private static void ApplyAndWatch<T>(ConfigEntry<T> entry, string rangeKey, Action<T> setter, bool notifyHostControlled)
         {
             if (entry == null || setter == null)
             {
@@ -170,14 +204,18 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
             void Update()
             {
-                setter(SanitizeValue(entry.Value, entry.Definition.Key));
+                setter(SanitizeValue(entry.Value, rangeKey));
+                if (notifyHostControlled)
+                {
+                    HostControlledChanged?.Invoke();
+                }
             }
 
             Update();
             entry.SettingChanged += (_, _) => Update();
         }
 
-        private static void ApplyAndWatch(ConfigEntry<string> entry, Func<string, Color> parser, Action<Color> setter)
+        private static void ApplyAndWatch(ConfigEntry<string> entry, Func<string, Color> parser, Action<Color> setter, bool notifyHostControlled)
         {
             if (entry == null || parser == null || setter == null)
             {
@@ -185,7 +223,223 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             }
 
             setter(parser(entry.Value));
-            entry.SettingChanged += (_, _) => setter(parser(entry.Value));
+            if (notifyHostControlled)
+            {
+                HostControlledChanged?.Invoke();
+            }
+            entry.SettingChanged += (_, _) =>
+            {
+                setter(parser(entry.Value));
+                if (notifyHostControlled)
+                {
+                    HostControlledChanged?.Invoke();
+                }
+            };
+        }
+
+        private static void RegisterHostControlledField(FeatureConfigEntryAttribute attribute, string key, FieldInfo field)
+        {
+            if (!attribute.HostControlled)
+            {
+                return;
+            }
+
+            s_hostControlledFields[key] = field;
+        }
+
+        internal static Dictionary<string, string> SnapshotHostControlled()
+        {
+            var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kvp in s_hostControlledFields)
+            {
+                if (s_hostRuntimeOverrides.TryGetValue(kvp.Key, out var overrideValue))
+                {
+                    snapshot[kvp.Key] = overrideValue;
+                    continue;
+                }
+
+                var field = kvp.Value;
+                var value = field.GetValue(null);
+                snapshot[kvp.Key] = SerializeValue(value, field.FieldType);
+            }
+
+            return snapshot;
+        }
+
+        internal static Dictionary<string, string> SnapshotHostControlledKeys(IEnumerable<string> keys)
+        {
+            var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (keys == null)
+            {
+                return snapshot;
+            }
+
+            foreach (var key in keys)
+            {
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    continue;
+                }
+
+                if (!s_hostControlledFields.TryGetValue(key, out var field))
+                {
+                    continue;
+                }
+
+                if (s_hostRuntimeOverrides.TryGetValue(key, out var overrideValue))
+                {
+                    snapshot[key] = overrideValue;
+                    continue;
+                }
+
+                var value = field.GetValue(null);
+                snapshot[key] = SerializeValue(value, field.FieldType);
+            }
+
+            return snapshot;
+        }
+
+        internal static void SetHostRuntimeOverride(string key, string serializedValue)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            var normalized = key.Trim();
+            if (!s_hostControlledFields.ContainsKey(normalized))
+            {
+                return;
+            }
+
+            var value = serializedValue ?? string.Empty;
+            if (s_hostRuntimeOverrides.TryGetValue(normalized, out var current) &&
+                string.Equals(current, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            s_hostRuntimeOverrides[normalized] = value;
+            HostControlledChanged?.Invoke();
+        }
+
+        internal static void ClearHostRuntimeOverride(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            var normalized = key.Trim();
+            if (!s_hostRuntimeOverrides.Remove(normalized))
+            {
+                return;
+            }
+
+            HostControlledChanged?.Invoke();
+        }
+
+        internal static void ApplyHostSnapshot(Dictionary<string, string> snapshot)
+        {
+            if (snapshot == null)
+            {
+                return;
+            }
+
+            var changed = false;
+            foreach (var kvp in snapshot)
+            {
+                if (!s_hostControlledFields.TryGetValue(kvp.Key, out var field))
+                {
+                    continue;
+                }
+
+                var parsed = DeserializeValue(kvp.Value, field.FieldType);
+                if (parsed != null)
+                {
+                    var current = field.GetValue(null);
+                    if (current == null || !current.Equals(parsed))
+                    {
+                        changed = true;
+                    }
+                    field.SetValue(null, parsed);
+                }
+            }
+
+            if (changed)
+            {
+                HostControlledChanged?.Invoke();
+            }
+        }
+
+        internal static void RestoreLocalHostControlledBaseline()
+        {
+            if (s_localHostControlledBaseline.Count == 0)
+            {
+                return;
+            }
+
+            ApplyHostSnapshot(s_localHostControlledBaseline);
+        }
+
+        private static string SerializeValue(object? value, Type fieldType)
+        {
+            if (fieldType == typeof(bool))
+            {
+                return ((bool)(value ?? false)).ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (fieldType == typeof(int))
+            {
+                return ((int)(value ?? 0)).ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (fieldType == typeof(float))
+            {
+                return ((float)(value ?? 0f)).ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (fieldType == typeof(string))
+            {
+                return value as string ?? string.Empty;
+            }
+
+            if (fieldType == typeof(Color))
+            {
+                return ColorToString((Color)(value ?? Color.black));
+            }
+
+            return value?.ToString() ?? string.Empty;
+        }
+
+        private static object? DeserializeValue(string value, Type fieldType)
+        {
+            if (fieldType == typeof(bool))
+            {
+                return bool.TryParse(value, out var b) && b;
+            }
+
+            if (fieldType == typeof(int))
+            {
+                return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : 0;
+            }
+
+            if (fieldType == typeof(float))
+            {
+                return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var f) ? f : 0f;
+            }
+
+            if (fieldType == typeof(string))
+            {
+                return value ?? string.Empty;
+            }
+
+            if (fieldType == typeof(Color))
+            {
+                return ColorFromString(value ?? string.Empty);
+            }
+
+            return null;
         }
 
         private static string ColorToString(Color input)
@@ -238,235 +492,53 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             if (value is float f && s_floatRanges.TryGetValue(key, out var floatRange))
             {
                 var clamped = Math.Min(floatRange.Max, Math.Max(floatRange.Min, f));
-                if (floatRange.Step > 0f)
-                {
-                    clamped = SnapFloatToStep(clamped, floatRange.Min, floatRange.Step);
-                    clamped = Math.Min(floatRange.Max, Math.Max(floatRange.Min, clamped));
-                }
-
                 return (T)(object)clamped;
             }
 
             if (value is int i && s_intRanges.TryGetValue(key, out var intRange))
             {
                 var clamped = Math.Min(intRange.Max, Math.Max(intRange.Min, i));
-                if (intRange.Step > 0)
-                {
-                    clamped = SnapIntToStep(clamped, intRange.Min, intRange.Step);
-                    clamped = Math.Min(intRange.Max, Math.Max(intRange.Min, clamped));
-                }
-
                 return (T)(object)clamped;
             }
 
             return value;
         }
 
-        private static ConfigDescription BuildStringDescription(string description, string[] acceptableValues)
-        {
-            if (acceptableValues == null || acceptableValues.Length == 0)
-            {
-                return new ConfigDescription(description);
-            }
 
-            return new ConfigDescription(description, new AcceptableValueList<string>(acceptableValues));
-        }
-
-        private static string[] ResolveAcceptableValues(string key, string[] configuredValues)
-        {
-            if (!string.Equals(key, nameof(FeatureFlags.AbilityActivateAction), StringComparison.Ordinal)
-                && !string.Equals(key, nameof(FeatureFlags.AbilityDirectionAction), StringComparison.Ordinal))
-            {
-                return configuredValues ?? Array.Empty<string>();
-            }
-
-            var discoveredValues = DiscoverRepoXRActionNames().ToArray();
-            if (discoveredValues.Length == 0)
-            {
-                return configuredValues ?? Array.Empty<string>();
-            }
-
-            var merged = new List<string>(discoveredValues.Length + (configuredValues?.Length ?? 0));
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            void AddRange(IEnumerable<string> values)
-            {
-                foreach (var value in values)
-                {
-                    if (string.IsNullOrWhiteSpace(value))
-                    {
-                        continue;
-                    }
-
-                    var trimmed = value.Trim();
-                    if (trimmed.Length == 0 || !seen.Add(trimmed))
-                    {
-                        continue;
-                    }
-
-                    merged.Add(trimmed);
-                }
-            }
-
-            AddRange(discoveredValues);
-            AddRange(configuredValues ?? Array.Empty<string>());
-            return merged.ToArray();
-        }
-
-        private static IEnumerable<string> DiscoverRepoXRActionNames()
-        {
-            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var asset in EnumerateRepoXRInputAssets())
-            {
-                if (asset == null)
-                {
-                    continue;
-                }
-
-                foreach (var map in asset.actionMaps)
-                {
-                    var mapName = map.name ?? string.Empty;
-                    foreach (var action in map.actions)
-                    {
-                        var actionName = action.name;
-                        if (string.IsNullOrWhiteSpace(actionName))
-                        {
-                            continue;
-                        }
-
-                        results.Add(actionName);
-                        if (!string.IsNullOrWhiteSpace(mapName))
-                        {
-                            results.Add(mapName + "/" + actionName);
-                        }
-                    }
-                }
-            }
-
-            return results;
-        }
-
-        private static IEnumerable<InputActionAsset> EnumerateRepoXRInputAssets()
-        {
-            var assetCollectionType = FindLoadedType("RepoXR.Assets.AssetCollection");
-            if (assetCollectionType == null)
-            {
-                yield break;
-            }
-
-            foreach (var propertyName in new[] { "VRInputs", "DefaultXRActions" })
-            {
-                InputActionAsset? asset = null;
-                try
-                {
-                    var property = assetCollectionType.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Static);
-                    asset = property?.GetValue(null) as InputActionAsset;
-                }
-                catch
-                {
-                    asset = null;
-                }
-
-                if (asset != null)
-                {
-                    yield return asset;
-                }
-            }
-        }
-
-        private static Type? FindLoadedType(string fullName)
-        {
-            if (string.IsNullOrWhiteSpace(fullName))
-            {
-                return null;
-            }
-
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                var type = assembly.GetType(fullName, throwOnError: false);
-                if (type != null)
-                {
-                    return type;
-                }
-            }
-
-            return null;
-        }
-
-        private static int DetermineIntStep(FeatureConfigEntryAttribute attribute)
-        {
-            if (!float.IsNaN(attribute.Step) && attribute.Step >= 1f)
-            {
-                return Math.Max(1, (int)Math.Round(attribute.Step));
-            }
-
-            return 1;
-        }
-
-        private static float DetermineFloatStep(FeatureConfigEntryAttribute attribute, float minValue)
-        {
-            if (!float.IsNaN(attribute.Step) && attribute.Step > 0f)
-            {
-                return attribute.Step;
-            }
-
-            return DetermineDefaultFloatStep(minValue);
-        }
-
-        private static float DetermineDefaultFloatStep(float minValue)
-        {
-            var baseValue = Math.Abs(minValue);
-            if (baseValue <= 0f)
-            {
-                return 0.1f;
-            }
-
-            var exponent = Math.Floor(Math.Log10(baseValue));
-            return (float)Math.Pow(10, exponent);
-        }
-
-        private static void RegisterFloatRange(string key, float min, float max, float step)
+        private static void RegisterFloatRange(string key, float min, float max)
         {
             s_floatRanges[key] = new RangeF
             {
                 Min = min,
-                Max = max,
-                Step = step
+                Max = max
             };
         }
 
-        private static void RegisterIntRange(string key, int min, int max, int step)
+        private static void RegisterIntRange(string key, int min, int max)
         {
             s_intRanges[key] = new RangeI
             {
                 Min = min,
-                Max = max,
-                Step = step
+                Max = max
             };
         }
 
-        private static float SnapFloatToStep(float value, float min, float step)
-        {
-            if (step <= 0f)
-            {
-                return value;
-            }
 
-            var offset = (value - min) / step;
-            var steps = Math.Round(offset, MidpointRounding.AwayFromZero);
-            return min + (float)steps * step;
+        private static string BuildRangeKey(string section, string key)
+        {
+            return $"{section}:{key}";
         }
 
-        private static int SnapIntToStep(int value, int min, int step)
+        private static void CaptureLocalHostControlledBaseline()
         {
-            if (step <= 0)
+            s_localHostControlledBaseline.Clear();
+            var snapshot = SnapshotHostControlled();
+            foreach (var kvp in snapshot)
             {
-                return value;
+                s_localHostControlledBaseline[kvp.Key] = kvp.Value;
             }
-
-            var offset = (value - min) / (double)step;
-            var steps = (int)Math.Round(offset, MidpointRounding.AwayFromZero);
-            return min + steps * step;
         }
+
     }
 }
+

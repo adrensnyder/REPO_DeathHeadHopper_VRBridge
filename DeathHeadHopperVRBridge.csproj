@@ -21,87 +21,87 @@
 
 	<ItemGroup>
 		<Reference Include="BepInEx">
-			<HintPath>libs\BepInEx\core\BepInEx.dll</HintPath>
+			<HintPath>..\00Libs\BepInEx\core\BepInEx.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="BepInEx.Harmony">
-			<HintPath>libs\BepInEx\core\BepInEx.Harmony.dll</HintPath>
+			<HintPath>..\00Libs\BepInEx\core\BepInEx.Harmony.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="0Harmony">
-			<HintPath>libs\BepInEx\core\0Harmony.dll</HintPath>
+			<HintPath>..\00Libs\BepInEx\core\0Harmony.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="MonoMod.RuntimeDetour">
-			<HintPath>libs\BepInEx\core\MonoMod.RuntimeDetour.dll</HintPath>
+			<HintPath>..\00Libs\BepInEx\core\MonoMod.RuntimeDetour.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="MonoMod.Utils">
-			<HintPath>libs\BepInEx\core\MonoMod.Utils.dll</HintPath>
+			<HintPath>..\00Libs\BepInEx\core\MonoMod.Utils.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine">
-			<HintPath>libs\Unity\UnityEngine.dll</HintPath>
+			<HintPath>..\00Libs\Unity\UnityEngine.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine.CoreModule">
-			<HintPath>libs\Unity\UnityEngine.CoreModule.dll</HintPath>
+			<HintPath>..\00Libs\Unity\UnityEngine.CoreModule.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine.TextRenderingModule">
-			<HintPath>libs\Unity\UnityEngine.TextRenderingModule.dll</HintPath>
+			<HintPath>..\00Libs\Unity\UnityEngine.TextRenderingModule.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine.PhysicsModule">
-			<HintPath>libs\Unity\UnityEngine.PhysicsModule.dll</HintPath>
+			<HintPath>..\00Libs\Unity\UnityEngine.PhysicsModule.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.InputSystem">
-			<HintPath>libs\GameAssemblies\Unity.InputSystem.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.InputSystem.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine.TextRenderingModule">
-			<HintPath>libs\Unity\UnityEngine.TextRenderingModule.dll</HintPath>
+			<HintPath>..\00Libs\Unity\UnityEngine.TextRenderingModule.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.Mathematics">
-			<HintPath>libs\GameAssemblies\Unity.Mathematics.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.Mathematics.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.XR.CoreUtils">
-			<HintPath>libs\GameAssemblies\Unity.XR.CoreUtils.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.XR.CoreUtils.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.XR.Interaction.Toolkit">
-			<HintPath>libs\GameAssemblies\Unity.XR.Interaction.Toolkit.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.XR.Interaction.Toolkit.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.XR.Management">
-			<HintPath>libs\GameAssemblies\Unity.XR.Management.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.XR.Management.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.XR.OpenXR">
-			<HintPath>libs\GameAssemblies\Unity.XR.OpenXR.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Unity.XR.OpenXR.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="UnityEngine.SpatialTracking">
-			<HintPath>libs\GameAssemblies\UnityEngine.SpatialTracking.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\UnityEngine.SpatialTracking.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="PhotonUnityNetworking">
-			<HintPath>libs\GameAssemblies\PhotonUnityNetworking.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\PhotonUnityNetworking.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Assembly-CSharp">
-			<HintPath>libs\GameAssemblies\Assembly-CSharp.dll</HintPath>
+			<HintPath>..\00Libs\GameAssemblies\Assembly-CSharp.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="DeathHeadHopper">
-			<HintPath>libs\OriginalMod\DeathHeadHopper.dll</HintPath>
+			<HintPath>..\00Libs\OriginalMod\DeathHeadHopper.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="RepoXR">
-			<HintPath>libs\OriginalMod\RepoXR.dll</HintPath>
+			<HintPath>..\00Libs\OriginalMod\RepoXR.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 	</ItemGroup>
@@ -112,18 +112,18 @@
 		<PackageReference Include="System.Memory" Version="4.5.5" />
 	</ItemGroup>
 	
-	<Target Name="PostBuildThunderstoreManifest" AfterTargets="PostBuildEvent" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\plugins\')">
-		<Copy SourceFiles="$(TargetPath)" DestinationFolder="Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\plugins\" />
+	<Target Name="PostBuildThunderstoreManifest" AfterTargets="PostBuildEvent" Condition="Exists('..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge\plugins\')">
+		<Copy SourceFiles="$(TargetPath)" DestinationFolder="..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge\plugins\" />
 		<Message Text="Copied $(TargetFileName) to Thunderstore manifest folder" Importance="high" />
 	</Target>
 
-	<Target Name="PostBuildThunderstoreZip" AfterTargets="Build" Condition="Exists('Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge')">
-		<Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path 'Thunderstore\AdrenSnyder-DeathHeadHopperVRBridge\*' -DestinationPath 'Thunderstore\$(ThunderstoreZipFileName)' -Force&quot;" />
-		<Message Text="Created Thunderstore\$(ThunderstoreZipFileName)" Importance="high" />
+	<Target Name="PostBuildThunderstoreZip" AfterTargets="Build" Condition="Exists('..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge')">
+		<MakeDir Directories="..\00ThunderstoreUpload\_zips" />
+		<Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge\*' -DestinationPath '..\00ThunderstoreUpload\_zips\$(ThunderstoreZipFileName)' -Force&quot;" />
+		<Message Text="Created ..\00ThunderstoreUpload\_zips\$(ThunderstoreZipFileName)" Importance="high" />
 	</Target>
 
 </Project>
-
 
 
 

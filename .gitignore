@@ -14,11 +14,11 @@ x64/
 [Bb]in/
 [Oo]bj/
 .vs/
-Logs/
-Backup/
-Libs/
-Thunderstore/
-Docs/
+[Ll]ogs/
+[Bb]ackup/
+[Ll]ibs/
+[Tt]hunderstore/
+[Dd]ocs/
 00Vari/
 
 # MSTest test Results
