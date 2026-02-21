@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Reflection;
+using BepInEx.Bootstrap;
 using HarmonyLib;
 using DeathHeadHopperVRBridge.Modules.Logging;
 
@@ -10,9 +11,16 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
     internal static class LastChanceCameraAimCompatPatch
     {
         private const string LogKey = "LastChance.CameraForce.Noop.VR";
+        private const string LastChancePluginGuid = "AdrenSnyder.DHHFLastChanceMode";
 
         private static MethodBase? TargetMethod()
         {
+            // Apply this compatibility patch only when LastChance is actually loaded.
+            if (!Chainloader.PluginInfos.ContainsKey(LastChancePluginGuid))
+            {
+                return null;
+            }
+
             var type =
                 AccessTools.TypeByName("DHHFLastChanceMode.Modules.Gameplay.LastChance.Monsters.Pipeline.LastChanceMonstersCameraForceLockModule") ??
                 AccessTools.TypeByName("DeathHeadHopperFix.Modules.Gameplay.LastChance.Monsters.Pipeline.LastChanceMonstersCameraForceLockModule");
