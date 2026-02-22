@@ -43,23 +43,29 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate VR Ability", "Hand used to hold the grip that activates the spectate ability cursor. Valid values: Auto (opposite the selected main hand in RepoXR), Left, Right.", Options = new[] { "Auto", "Left", "Right" }, HostControlled = false)]
         public static string AbilityGripPreference = "Auto";
 
-        [FeatureConfigEntry("Spectate VR Ability", "Action name used to activate the selected slot. Runtime discovery from RepoXR actions is also used, then static fallbacks.",
+        [FeatureConfigEntry("Spectate VR Ability", "Action token used to activate the selected slot. Preferred values are InputKey names (for example: Chat, Jump, Crouch, Interact, Push; @Chat and InputKey.Chat are also valid). Movement/Turn/Map/Grip actions are ignored.",
             Options = new[]
             {
+                "Chat",
+                "Jump",
+                "Crouch",
+                "Interact",
+                "Push",
                 "VR Actions/ResetHeight",
-                "VR Actions/Interact",
-                "VR Actions/Push",
             }, HostControlled = false)]
-        public static string AbilityActivateAction = "VR Actions/ResetHeight";
+        public static string AbilityActivateAction = "Chat";
 
-        [FeatureConfigEntry("Spectate VR Direction", "Action name used to activate slot 2. Runtime discovery from RepoXR actions is also used, then static fallbacks.",
+        [FeatureConfigEntry("Spectate VR Direction", "Action token used to activate slot 2. Preferred values are InputKey names (for example: Jump, Chat, Crouch, Interact, Push; @Jump and InputKey.Jump are also valid). Movement/Turn/Map/Grip actions are ignored.",
             Options = new[]
             {
+                "Jump",
+                "Chat",
+                "Crouch",
+                "Interact",
+                "Push",
                 "VR Actions/ResetHeight",
-                "VR Actions/Interact",
-                "VR Actions/Push",
             }, HostControlled = false)]
-        public static string AbilityDirectionAction = "VR Actions/Interact";
+        public static string AbilityDirectionAction = "Jump";
 
         [FeatureConfigEntry("Spectate VR Ability", "Distance in meters at which the VR ability cursor floats in front of the view.", Min = 0.2f, Max = 2f, HostControlled = false)]
         public static float AbilityCursorDistance = 0.6f;

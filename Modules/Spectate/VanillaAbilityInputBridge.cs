@@ -60,6 +60,28 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             "VR Actions/Turn",
             "ResetHeight"
         };
+        private static readonly HashSet<string> ExcludedActionNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Movement",
+            "Turn",
+            "Scroll",
+            "Map",
+            "GripLeft",
+            "leftGrip",
+            "GripRight",
+            "rightGrip",
+            "MapGrabLeft",
+            "MapGrabRight",
+            "VR Actions/Movement",
+            "VR Actions/Turn",
+            "VR Actions/Map",
+            "VR Actions/GripLeft",
+            "VR Actions/leftGrip",
+            "VR Actions/GripRight",
+            "VR Actions/rightGrip",
+            "VR Actions/MapGrabLeft",
+            "VR Actions/MapGrabRight",
+        };
 
         internal static readonly ManualLogSource Log = BepInEx.Logging.Logger.CreateLogSource("DeathHeadHopperFix-VR.VanillaAbility");
         internal const string ModuleTag = "[DeathHeadHopperFix-VR] [VanillaAbility]";
@@ -191,6 +213,15 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private object? ResolveAction(string rawConfig, string keyPrefix, string slotLabel, int slotIndex)
         {
+            foreach (var configured in ParseActionNames(rawConfig))
+            {
+                if (TryResolveInputKeyAction(configured, out var mappedAction, out var mappedLabel))
+                {
+                    LogDebug($"{keyPrefix}Ready", $"Action ready for {slotLabel}: {mappedLabel}. Slot index={slotIndex}");
+                    return mappedAction;
+                }
+            }
+
             var actionNames = BuildActivateActionCandidates(rawConfig);
             var action = GetFirstAvailableAction(actionNames, out var selectedActionName);
             if (action == null)
@@ -318,7 +349,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 }
 
                 var trimmed = candidate.Trim();
-                if (trimmed.Length == 0 || !seen.Add(trimmed))
+                if (trimmed.Length == 0 || IsExcludedAction(trimmed) || !seen.Add(trimmed))
                 {
                     return;
                 }
@@ -342,6 +373,81 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             return names;
+        }
+
+        private static bool TryResolveInputKeyAction(string rawToken, out object? action, out string label)
+        {
+            action = null;
+            label = string.Empty;
+            var token = NormalizeInputKeyToken(rawToken);
+            if (string.IsNullOrEmpty(token))
+            {
+                return false;
+            }
+
+            if (!Enum.TryParse(token, true, out InputKey parsedKey))
+            {
+                return false;
+            }
+
+            if (parsedKey == InputKey.Map)
+            {
+                return false;
+            }
+
+            var manager = InputManager.instance;
+            if (manager == null)
+            {
+                return false;
+            }
+
+            var mappedAction = manager.GetAction(parsedKey);
+            if (mappedAction == null)
+            {
+                return false;
+            }
+
+            action = mappedAction;
+            label = $"InputKey.{parsedKey}";
+            return true;
+        }
+
+        private static string NormalizeInputKeyToken(string rawToken)
+        {
+            if (string.IsNullOrWhiteSpace(rawToken))
+            {
+                return string.Empty;
+            }
+
+            var token = rawToken.Trim();
+            if (token.StartsWith("@", StringComparison.Ordinal))
+            {
+                token = token.Substring(1);
+            }
+
+            const string prefix = "InputKey.";
+            if (token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(prefix.Length);
+            }
+
+            return token.Trim();
+        }
+
+        private static bool IsExcludedAction(string candidate)
+        {
+            if (ExcludedActionNames.Contains(candidate))
+            {
+                return true;
+            }
+
+            const string vrPrefix = "VR Actions/";
+            var normalized = candidate.Trim();
+            if (normalized.StartsWith(vrPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(vrPrefix.Length).Trim();
+            }
+            return ExcludedActionNames.Contains(normalized);
         }
 
         private static IEnumerable<string> DiscoverRepoXRActionNames()
