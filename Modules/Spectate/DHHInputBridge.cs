@@ -22,6 +22,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         private static readonly FieldInfo? RepoXRRightInteractorField = AccessTools.Field(typeof(XRRayInteractorManager), "rightInteractor");
         private static readonly FieldInfo? JumpBufferTimerField = AccessTools.Field(typeof(DeathHeadHopper.DeathHead.Handlers.JumpHandler), "jumpBufferTimer");
         private static readonly FieldInfo? JumpCooldownTimerField = AccessTools.Field(typeof(DeathHeadHopper.DeathHead.Handlers.JumpHandler), "jumpCooldownTimer");
+        private static readonly FieldInfo? SpectatePlayerField = AccessTools.Field(typeof(SpectateCamera), "player");
 
         internal static readonly ManualLogSource Log = MovementAnalog.Log;
         internal const string ModuleTag = MovementAnalog.ModuleTag;
@@ -30,6 +31,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private static Transform? _abilityAimProxy;
         private static bool _repoXRRayVisible;
+        private static bool _repoXRRayLengthOverridden;
+        private static Transform? _repoXRRayHitMarker;
 
         internal static void UpdateCameraReference(DHHInputManager instance)
         {
@@ -151,6 +154,24 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return forward.sqrMagnitude < 0.0001f ? SpectateHeadBridge.GetAlignedForward() : forward.normalized;
         }
 
+        internal static bool ShouldSuppressLegacyMovement()
+        {
+            if (!SpectateHeadBridge.IsGripPressedForCamera())
+            {
+                return false;
+            }
+
+            var spectate = SpectateCamera.instance;
+            var local = PlayerAvatar.instance;
+            if (spectate == null || local == null)
+            {
+                return false;
+            }
+
+            var target = SpectatePlayerField?.GetValue(spectate) as PlayerAvatar;
+            return target != null && target != local;
+        }
+
         private static Vector3 GetHeadAimForward()
         {
             var cameraTransform = SpectateHeadBridge.GetHmdCameraTransform() ?? SpectateHeadBridge.GetAlignedCameraTransform();
@@ -239,6 +260,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             if (!SpectateHeadBridge.IsSpectatingHead())
             {
                 DisableControllerRayVisualizer();
+                SetRepoXRRayHitMarkerVisible(false);
                 return;
             }
 
@@ -246,15 +268,134 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             if (!usesControllerRay)
             {
                 DisableControllerRayVisualizer();
+                SetRepoXRRayHitMarkerVisible(false);
                 return;
             }
 
             SetRepoXRRayVisibility(FeatureFlags.ShowControllerRayLine);
+            UpdateRepoXRRayHitMarkerPreview();
         }
 
         private static void DisableControllerRayVisualizer()
         {
             SetRepoXRRayVisibility(false);
+            RestoreRepoXRRayLengthOverride();
+            SetRepoXRRayHitMarkerVisible(false);
+        }
+
+        private static void UpdateRepoXRRayHitMarkerPreview()
+        {
+            if (!FeatureFlags.ShowControllerRayHitMarker)
+            {
+                SetRepoXRRayHitMarkerVisible(false);
+                return;
+            }
+
+            var maxDistance = Mathf.Max(1f, FeatureFlags.MovementRaycastDistance);
+            if (!TryGetMovementRaycastHit(GetCameraGripSelection(), maxDistance, out var hit))
+            {
+                SetRepoXRRayHitMarkerVisible(false);
+                return;
+            }
+
+            EnsureRepoXRRayHitMarker();
+            if (_repoXRRayHitMarker == null)
+            {
+                return;
+            }
+
+            var size = Mathf.Clamp(FeatureFlags.ControllerRayHitMarkerSize, 0.005f, 0.2f);
+            _repoXRRayHitMarker.localScale = Vector3.one * size;
+            _repoXRRayHitMarker.position = hit.point + hit.normal * Mathf.Max(0.001f, size * 0.1f);
+            _repoXRRayHitMarker.rotation = Quaternion.LookRotation(hit.normal.sqrMagnitude > 0.0001f ? hit.normal : Vector3.up);
+            _repoXRRayHitMarker.gameObject.SetActive(true);
+        }
+
+        private static bool TryGetMovementRaycastHit(GripSelection controllerPreference, float maxDistance, out RaycastHit selectedHit)
+        {
+            selectedHit = default;
+            if (!TryGetRaySource(true, controllerPreference, out var sourcePosition, out var sourceForward, out _))
+            {
+                return false;
+            }
+
+            var rayDirection = sourceForward.normalized;
+            if (rayDirection.sqrMagnitude < 0.0001f)
+            {
+                return false;
+            }
+
+            var ray = new Ray(sourcePosition, rayDirection);
+            var head = PlayerAvatar.instance?.playerDeathHead;
+            var headPosition = head != null ? head.transform.position : sourcePosition;
+            var headDistanceOnRay = Mathf.Max(0f, Vector3.Dot(headPosition - ray.origin, ray.direction));
+
+            var hits = Physics.RaycastAll(ray, maxDistance, ~0, QueryTriggerInteraction.Ignore);
+            if (hits == null || hits.Length == 0)
+            {
+                return false;
+            }
+
+            Array.Sort(hits, static (a, b) => a.distance.CompareTo(b.distance));
+            for (var i = 0; i < hits.Length; i++)
+            {
+                var hit = hits[i];
+                if (hit.distance + 0.01f < headDistanceOnRay)
+                {
+                    continue;
+                }
+
+                selectedHit = hit;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void EnsureRepoXRRayHitMarker()
+        {
+            if (_repoXRRayHitMarker != null)
+            {
+                return;
+            }
+
+            var marker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            marker.name = "DeathHeadHopperVRBridge_RepoXRRayHitMarker";
+            marker.layer = 0;
+            UnityEngine.Object.DontDestroyOnLoad(marker);
+
+            var collider = marker.GetComponent<Collider>();
+            if (collider != null)
+            {
+                UnityEngine.Object.Destroy(collider);
+            }
+
+            var renderer = marker.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                var shader = Shader.Find("Unlit/Color");
+                if (shader != null)
+                {
+                    renderer.material = new Material(shader);
+                }
+
+                renderer.material.color = Color.red;
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+            }
+
+            marker.SetActive(false);
+            _repoXRRayHitMarker = marker.transform;
+        }
+
+        private static void SetRepoXRRayHitMarkerVisible(bool visible)
+        {
+            if (_repoXRRayHitMarker == null)
+            {
+                return;
+            }
+
+            _repoXRRayHitMarker.gameObject.SetActive(visible);
         }
 
         private static void SetRepoXRRayVisibility(bool visible)
@@ -268,6 +409,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             manager.SetVisible(visible);
             if (visible && SpectateHeadBridge.IsSpectatingHead())
             {
+                ApplyRepoXRRayLengthOverride();
+
                 var visuals = manager.GetComponentsInChildren<XRInteractorLineVisual>(true);
                 for (var i = 0; i < visuals.Length; i++)
                 {
@@ -285,6 +428,108 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             _repoXRRayVisible = visible;
+        }
+
+        private static void ApplyRepoXRRayLengthOverride()
+        {
+            var manager = XRRayInteractorManager.Instance;
+            if (manager == null)
+            {
+                return;
+            }
+
+            if (!TryGetRepoXRInteractor(GetCameraGripSelection(), out var selectedInteractor) || selectedInteractor == null)
+            {
+                return;
+            }
+
+            var selectedVisual = selectedInteractor.GetComponent<XRInteractorLineVisual>();
+            if (selectedVisual == null)
+            {
+                return;
+            }
+
+            var configuredLength = Mathf.Max(1f, FeatureFlags.ControllerRayLineLength);
+            selectedVisual.lineLength = configuredLength;
+
+            if (TryGetNonSelectedRepoXRInteractor(selectedInteractor, out var nonSelectedInteractor) && nonSelectedInteractor != null)
+            {
+                var nonSelectedVisual = nonSelectedInteractor.GetComponent<XRInteractorLineVisual>();
+                if (nonSelectedVisual != null)
+                {
+                    nonSelectedVisual.lineLength = 1f;
+                }
+            }
+
+            _repoXRRayLengthOverridden = true;
+        }
+
+        private static void RestoreRepoXRRayLengthOverride()
+        {
+            if (!_repoXRRayLengthOverridden)
+            {
+                return;
+            }
+
+            var manager = XRRayInteractorManager.Instance;
+            if (manager == null)
+            {
+                _repoXRRayLengthOverridden = false;
+                return;
+            }
+
+            var activeInteractor = manager.GetActiveInteractor().Item1;
+            if (activeInteractor != null)
+            {
+                var activeVisual = activeInteractor.GetComponent<XRInteractorLineVisual>();
+                if (activeVisual != null)
+                {
+                    activeVisual.lineLength = 20f;
+                }
+            }
+
+            if (TryGetNonSelectedRepoXRInteractor(activeInteractor, out var nonActiveInteractor) && nonActiveInteractor != null)
+            {
+                var nonActiveVisual = nonActiveInteractor.GetComponent<XRInteractorLineVisual>();
+                if (nonActiveVisual != null)
+                {
+                    nonActiveVisual.lineLength = 1f;
+                }
+            }
+
+            _repoXRRayLengthOverridden = false;
+        }
+
+        private static bool TryGetNonSelectedRepoXRInteractor(XRRayInteractor? selectedInteractor, out XRRayInteractor? otherInteractor)
+        {
+            otherInteractor = null;
+            var manager = XRRayInteractorManager.Instance;
+            if (manager == null)
+            {
+                return false;
+            }
+
+            var leftInteractor = RepoXRLeftInteractorField?.GetValue(manager) as XRRayInteractor;
+            var rightInteractor = RepoXRRightInteractorField?.GetValue(manager) as XRRayInteractor;
+
+            if (selectedInteractor == null)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(selectedInteractor, leftInteractor))
+            {
+                otherInteractor = rightInteractor;
+                return otherInteractor != null;
+            }
+
+            if (ReferenceEquals(selectedInteractor, rightInteractor))
+            {
+                otherInteractor = leftInteractor;
+                return otherInteractor != null;
+            }
+
+            return false;
         }
 
         private static bool TryGetRaySource(bool useControllerSource, GripSelection controllerPreference, out Vector3 sourcePosition, out Vector3 sourceForward, out string sourceLabel)
@@ -660,6 +905,12 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return true;
             }
 
+            if (DHHInputBridge.ShouldSuppressLegacyMovement())
+            {
+                __result = 0f;
+                return false;
+            }
+
             if (!MovementAnalog.TryGetAnalog(out var analog))
             {
                 return true;
@@ -678,6 +929,12 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             if (!SpectateHeadBridge.IsSpectatingHead())
             {
                 return true;
+            }
+
+            if (DHHInputBridge.ShouldSuppressLegacyMovement())
+            {
+                __result = 0f;
+                return false;
             }
 
             if (!MovementAnalog.TryGetAnalog(out var analog))

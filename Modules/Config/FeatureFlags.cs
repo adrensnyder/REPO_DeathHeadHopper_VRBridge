@@ -13,6 +13,15 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate Movement", "Render the RepoXR ray line for ControllerRaycast while spectating the head.", HostControlled = false)]
         public static bool ShowControllerRayLine = true;
 
+        [FeatureConfigEntry("Spectate Movement", "Line length (meters) forced on the active RepoXR controller ray while DeathHead spectate raycast control is active. Vanilla RepoXR length management is restored outside this context.", Min = 1f, Max = 200f, HostControlled = false)]
+        public static float ControllerRayLineLength = 20f;
+
+        [FeatureConfigEntry("Spectate Movement", "Show a red marker at the current controller ray collision point used by spectate movement aiming.", HostControlled = false)]
+        public static bool ShowControllerRayHitMarker = true;
+
+        [FeatureConfigEntry("Spectate Movement", "Size of the red marker shown at the controller ray collision point.", Min = 0.005f, Max = 0.2f, HostControlled = false)]
+        public static float ControllerRayHitMarkerSize = 0.03f;
+
         [FeatureConfigEntry("Spectate Movement", "When using ControllerRaycast, ignore small horizontal stick drift while pushing forward/backward.", Min = 0f, Max = 0.5f, HostControlled = false)]
         public static float ControllerRaycastXAxisDeadzone = 0.05f;
 
@@ -41,17 +50,8 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             Options = new[]
             {
                 "VR Actions/ResetHeight",
-                "VR Actions/Movement",
-                "VR Actions/Turn",
-                "VR Actions/Grab",
                 "VR Actions/Interact",
                 "VR Actions/Push",
-                "VR Actions/GripLeft",
-                "VR Actions/leftGrip",
-                "VR Actions/GripRight",
-                "VR Actions/rightGrip",
-                "VR Actions/MapGrabLeft",
-                "VR Actions/MapGrabRight"
             }, HostControlled = false)]
         public static string AbilityActivateAction = "VR Actions/ResetHeight";
 
@@ -59,19 +59,10 @@ namespace DeathHeadHopperVRBridge.Modules.Config
             Options = new[]
             {
                 "VR Actions/ResetHeight",
-                "VR Actions/Movement",
-                "VR Actions/Turn",
-                "VR Actions/Grab",
                 "VR Actions/Interact",
                 "VR Actions/Push",
-                "VR Actions/GripLeft",
-                "VR Actions/leftGrip",
-                "VR Actions/GripRight",
-                "VR Actions/rightGrip",
-                "VR Actions/MapGrabLeft",
-                "VR Actions/MapGrabRight"
             }, HostControlled = false)]
-        public static string AbilityDirectionAction = "VR Actions/GripRight";
+        public static string AbilityDirectionAction = "VR Actions/Interact";
 
         [FeatureConfigEntry("Spectate VR Ability", "Distance in meters at which the VR ability cursor floats in front of the view.", Min = 0.2f, Max = 2f, HostControlled = false)]
         public static float AbilityCursorDistance = 0.6f;
