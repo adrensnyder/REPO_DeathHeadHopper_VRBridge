@@ -27,7 +27,6 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         internal static readonly ManualLogSource Log = MovementAnalog.Log;
         internal const string ModuleTag = MovementAnalog.ModuleTag;
         internal static MovementDirectionSource MovementDirection => ParseMovementDirection();
-        internal static AbilityDirectionSource AbilityDirection => ParseAbilityDirection();
 
         private static Transform? _abilityAimProxy;
         private static bool _repoXRRayVisible;
@@ -73,6 +72,19 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 && Mathf.Abs(input.y) > 0.05f)
             {
                 input.x = 0f;
+            }
+
+            if (MovementDirection == MovementDirectionSource.ControllerRaycast || MovementDirection == MovementDirectionSource.HeadRaycast)
+            {
+                // Favor forward/back intent when vertical input clearly dominates, reducing joystick X drift.
+                var absX = Mathf.Abs(input.x);
+                var absY = Mathf.Abs(input.y);
+                var minY = Mathf.Clamp01(FeatureFlags.ControllerRaycastForwardPriorityMinY);
+                var dominanceRatio = Mathf.Clamp(FeatureFlags.ControllerRaycastForwardPriorityRatio, 1f, 3f);
+                if (absY > minY && absY >= absX * dominanceRatio)
+                {
+                    input.x = 0f;
+                }
             }
 
             var forward = GetMovementForward(input);
@@ -145,10 +157,10 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static Vector3 GetAbilityForward()
         {
-            var forward = AbilityDirection switch
+            var forward = MovementDirection switch
             {
-                AbilityDirectionSource.HeadRaycast => GetRaycastAimForward(false, GetAbilityGripSelection(), false, Mathf.Max(1f, FeatureFlags.AbilityRaycastDistance), FeatureFlags.AbilityRaycastUseHorizon),
-                _ => GetRaycastAimForward(true, GetAbilityGripSelection(), false, Mathf.Max(1f, FeatureFlags.AbilityRaycastDistance), FeatureFlags.AbilityRaycastUseHorizon),
+                MovementDirectionSource.HeadRaycast => GetRaycastAimForward(false, GetUnifiedRaycastGripSelection(), false, GetUnifiedRaycastDistance(), false),
+                _ => GetRaycastAimForward(true, GetUnifiedRaycastGripSelection(), false, GetUnifiedRaycastDistance(), false),
             };
 
             return forward.sqrMagnitude < 0.0001f ? SpectateHeadBridge.GetAlignedForward() : forward.normalized;
@@ -204,25 +216,11 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
             var ray = new Ray(sourcePosition, rayDirection);
             var head = PlayerAvatar.instance?.playerDeathHead;
-            var headPosition = head != null ? head.transform.position : sourcePosition;
-            var headDistanceOnRay = Mathf.Max(0f, Vector3.Dot(headPosition - ray.origin, ray.direction));
             var targetPoint = ray.origin + ray.direction * maxDistance;
 
-            var hits = Physics.RaycastAll(ray, maxDistance, ~0, QueryTriggerInteraction.Ignore);
-            if (hits != null && hits.Length > 0)
+            if (TryGetFirstRaycastHit(ray, maxDistance, out var hit))
             {
-                Array.Sort(hits, static (a, b) => a.distance.CompareTo(b.distance));
-                for (var i = 0; i < hits.Length; i++)
-                {
-                    var hit = hits[i];
-                    if (hit.distance + 0.01f < headDistanceOnRay)
-                    {
-                        continue;
-                    }
-
-                    targetPoint = hit.point;
-                    break;
-                }
+                targetPoint = hit.point;
             }
 
             if (useControllerSource)
@@ -264,7 +262,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            var usesControllerRay = MovementDirection == MovementDirectionSource.ControllerRaycast;
+            var usesControllerRay = UsesAnyControllerRay();
             if (!usesControllerRay)
             {
                 DisableControllerRayVisualizer();
@@ -291,8 +289,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            var maxDistance = Mathf.Max(1f, FeatureFlags.MovementRaycastDistance);
-            if (!TryGetMovementRaycastHit(GetCameraGripSelection(), maxDistance, out var hit))
+            var maxDistance = Mathf.Max(FeatureFlags.ControllerRayLineLength, GetUnifiedRaycastDistance());
+            if (!TryGetControllerRaycastHit(GetUnifiedRaycastGripSelection(), maxDistance, out var hit))
             {
                 SetRepoXRRayHitMarkerVisible(false);
                 return;
@@ -311,7 +309,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             _repoXRRayHitMarker.gameObject.SetActive(true);
         }
 
-        private static bool TryGetMovementRaycastHit(GripSelection controllerPreference, float maxDistance, out RaycastHit selectedHit)
+        private static bool TryGetControllerRaycastHit(GripSelection controllerPreference, float maxDistance, out RaycastHit selectedHit)
         {
             selectedHit = default;
             if (!TryGetRaySource(true, controllerPreference, out var sourcePosition, out var sourceForward, out _))
@@ -326,10 +324,18 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             var ray = new Ray(sourcePosition, rayDirection);
-            var head = PlayerAvatar.instance?.playerDeathHead;
-            var headPosition = head != null ? head.transform.position : sourcePosition;
-            var headDistanceOnRay = Mathf.Max(0f, Vector3.Dot(headPosition - ray.origin, ray.direction));
+            if (!TryGetFirstRaycastHit(ray, maxDistance, out var hit))
+            {
+                return false;
+            }
 
+            selectedHit = hit;
+            return true;
+        }
+
+        private static bool TryGetFirstRaycastHit(Ray ray, float maxDistance, out RaycastHit selectedHit)
+        {
+            selectedHit = default;
             var hits = Physics.RaycastAll(ray, maxDistance, ~0, QueryTriggerInteraction.Ignore);
             if (hits == null || hits.Length == 0)
             {
@@ -337,19 +343,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             Array.Sort(hits, static (a, b) => a.distance.CompareTo(b.distance));
-            for (var i = 0; i < hits.Length; i++)
-            {
-                var hit = hits[i];
-                if (hit.distance + 0.01f < headDistanceOnRay)
-                {
-                    continue;
-                }
-
-                selectedHit = hit;
-                return true;
-            }
-
-            return false;
+            selectedHit = hits[0];
+            return true;
         }
 
         private static void EnsureRepoXRRayHitMarker()
@@ -401,13 +396,23 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         private static void SetRepoXRRayVisibility(bool visible)
         {
             var manager = XRRayInteractorManager.Instance;
-            if (manager == null || _repoXRRayVisible == visible)
+            if (manager == null)
             {
                 return;
             }
 
-            manager.SetVisible(visible);
-            if (visible && SpectateHeadBridge.IsSpectatingHead())
+            if (!visible)
+            {
+                if (_repoXRRayVisible)
+                {
+                    manager.SetVisible(false);
+                }
+                _repoXRRayVisible = false;
+                return;
+            }
+
+            manager.SetVisible(true);
+            if (SpectateHeadBridge.IsSpectatingHead())
             {
                 ApplyRepoXRRayLengthOverride();
 
@@ -417,7 +422,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                     visuals[i].enabled = false;
                 }
 
-                if (TryGetRepoXRInteractor(GetCameraGripSelection(), out var selectedInteractor) && selectedInteractor != null)
+                if (TryGetVisualizedRepoXRInteractor(out var selectedInteractor) && selectedInteractor != null)
                 {
                     var selectedVisual = selectedInteractor.GetComponent<XRInteractorLineVisual>();
                     if (selectedVisual != null)
@@ -427,7 +432,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 }
             }
 
-            _repoXRRayVisible = visible;
+            _repoXRRayVisible = true;
         }
 
         private static void ApplyRepoXRRayLengthOverride()
@@ -438,7 +443,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            if (!TryGetRepoXRInteractor(GetCameraGripSelection(), out var selectedInteractor) || selectedInteractor == null)
+            if (!TryGetVisualizedRepoXRInteractor(out var selectedInteractor) || selectedInteractor == null)
             {
                 return;
             }
@@ -530,6 +535,24 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             return false;
+        }
+
+        private static bool TryGetVisualizedRepoXRInteractor(out XRRayInteractor? interactor)
+        {
+            interactor = null;
+            var manager = XRRayInteractorManager.Instance;
+            if (manager == null)
+            {
+                return false;
+            }
+
+            interactor = manager.GetActiveInteractor().Item1;
+            if (interactor != null)
+            {
+                return true;
+            }
+
+            return TryGetRepoXRInteractor(GetUnifiedRaycastGripSelection(), out interactor);
         }
 
         private static bool TryGetRaySource(bool useControllerSource, GripSelection controllerPreference, out Vector3 sourcePosition, out Vector3 sourceForward, out string sourceLabel)
@@ -635,7 +658,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             try
             {
-                var primaryTransform = TryGetPreferredControllerTransform(GetAbilityGripSelection(), out _);
+                var primaryTransform = TryGetPreferredControllerTransform(GetUnifiedRaycastGripSelection(), out _);
                 if (primaryTransform != null)
                 {
                     return primaryTransform.forward;
@@ -655,7 +678,6 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         }
 
         private static GripSelection GetCameraGripSelection() => GripSelectionHelper.Parse(FeatureFlags.CameraGripPreference);
-        private static GripSelection GetAbilityGripSelection() => GripSelectionHelper.Parse(FeatureFlags.AbilityGripPreference);
 
         private static Transform? TryGetPreferredControllerTransform(GripSelection preference, out string handName)
         {
@@ -700,25 +722,14 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return MovementDirectionSource.ControllerRaycast;
         }
 
-        private static AbilityDirectionSource ParseAbilityDirection()
+        private static GripSelection GetUnifiedRaycastGripSelection()
         {
-            var source = (FeatureFlags.AbilityDirectionSource ?? string.Empty).Trim();
-            if (source.Equals("Controller", StringComparison.OrdinalIgnoreCase))
-            {
-                return AbilityDirectionSource.ControllerRaycast;
-            }
+            return GetCameraGripSelection();
+        }
 
-            if (source.Equals("Head", StringComparison.OrdinalIgnoreCase))
-            {
-                return AbilityDirectionSource.HeadRaycast;
-            }
-
-            if (Enum.TryParse(source, true, out AbilityDirectionSource parsed))
-            {
-                return parsed;
-            }
-
-            return AbilityDirectionSource.ControllerRaycast;
+        private static float GetUnifiedRaycastDistance()
+        {
+            return Mathf.Max(1f, FeatureFlags.MovementRaycastDistance);
         }
 
         internal enum MovementDirectionSource
@@ -727,10 +738,9 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             ControllerRaycast
         }
 
-        internal enum AbilityDirectionSource
+        private static bool UsesAnyControllerRay()
         {
-            HeadRaycast,
-            ControllerRaycast
+            return MovementDirection == MovementDirectionSource.ControllerRaycast;
         }
 
         internal static bool TrySwapAimCamera(DHHInputManager instance, out Transform? original)

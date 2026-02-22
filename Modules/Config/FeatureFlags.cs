@@ -25,6 +25,12 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate Movement", "When using ControllerRaycast, ignore small horizontal stick drift while pushing forward/backward.", Min = 0f, Max = 0.5f, HostControlled = false)]
         public static float ControllerRaycastXAxisDeadzone = 0.05f;
 
+        [FeatureConfigEntry("Spectate Movement", "Minimum absolute vertical stick input required before applying forward-priority drift suppression.", Min = 0f, Max = 1f, HostControlled = false)]
+        public static float ControllerRaycastForwardPriorityMinY = 0.15f;
+
+        [FeatureConfigEntry("Spectate Movement", "Vertical-to-horizontal dominance ratio needed to force forward-priority drift suppression.", Min = 1f, Max = 3f, HostControlled = false)]
+        public static float ControllerRaycastForwardPriorityRatio = 1.35f;
+
         [FeatureConfigEntry("Spectate Camera", "Distance that the spectator camera stays behind the death head.", Min = 0.05f, Max = 1.5f, HostControlled = false)]
         public static float HeadCameraDistance = 0.45f;
 
@@ -33,15 +39,6 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
         [FeatureConfigEntry("Spectate Camera", "How fast the spectator camera lerps back to the default position.", Min = 1f, Max = 12f, HostControlled = false)]
         public static float HeadCameraLerpSpeed = 8f;
-
-        [FeatureConfigEntry("Spectate VR Ability", "Defines how DeathHeadHopper abilities are aimed. Recommended options are HeadRaycast/ControllerRaycast, which cast from POV to first hit and then aim from head to that point.", Options = new[] { "HeadRaycast", "ControllerRaycast" }, HostControlled = false)]
-        public static string AbilityDirectionSource = "ControllerRaycast";
-
-        [FeatureConfigEntry("Spectate VR Ability", "Maximum distance (meters) for the POV raycast used by HeadRaycast/ControllerRaycast.", Min = 2f, Max = 200f, HostControlled = false)]
-        public static float AbilityRaycastDistance = 60f;
-
-        [FeatureConfigEntry("Spectate VR Ability", "When true, POV raycast direction is flattened to the horizon plane before tracing.", HostControlled = false)]
-        public static bool AbilityRaycastUseHorizon = false;
 
         [FeatureConfigEntry("Spectate VR Ability", "Hand used to hold the grip that activates the spectate ability cursor. Valid values: Auto (opposite the selected main hand in RepoXR), Left, Right.", Options = new[] { "Auto", "Left", "Right" }, HostControlled = false)]
         public static string AbilityGripPreference = "Auto";
