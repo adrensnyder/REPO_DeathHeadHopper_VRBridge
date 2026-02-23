@@ -37,7 +37,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         movement = action.ReadValue<Vector2>();
         if (movement.sqrMagnitude > 0.0001f && SpectateHeadBridge.IsSpectatingHead())
         {
-            if (FeatureFlags.DebugMovementDirection && LogLimiter.Allow("JoystickSpectateLog", 0.5f))
+            if (InternalDebugConfig.DebugMovementDirection && LogLimiter.Allow("JoystickSpectateLog", 0.5f))
             {
                 LogSource.LogInfo($"{ModuleTag} Joystick moved while spectating head movement={movement:F3}");
             }
@@ -47,7 +47,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void LogAnalog(Vector2 analog, bool triggered)
         {
-            if (FeatureFlags.DebugMovementDirection && LogLimiter.Allow("MovementAnalog", 0.5f))
+            if (InternalDebugConfig.DebugMovementDirection && LogLimiter.Allow("MovementAnalog", 0.5f))
             {
                 LogSource.LogDebug($"{ModuleTag} Analog movement triggered={triggered} vector={analog:F3}");
             }

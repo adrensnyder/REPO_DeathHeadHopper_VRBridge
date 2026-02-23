@@ -15,6 +15,7 @@ namespace DeathHeadHopperVRBridge
     [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.1")]
     public sealed class Plugin : BaseUnityPlugin
     {
+        private const string BuildStamp = "C13-ability-pipeline-probe";
         private Harmony? _harmony;
 
         /// <summary>Initializes the configuration and applies Harmony patches.</summary>
@@ -26,9 +27,13 @@ namespace DeathHeadHopperVRBridge
             {
                 _harmony = new Harmony("DeathHeadHopperFix-VR.Spectate");
                 _harmony.PatchAll();
-                VrAbilityBarBridge.EnsureAttached(gameObject);
+                // Legacy VR cursor-based slot selector (Grab/Interact/Push confirm path).
+                // Kept in codebase for fallback/reference, but intentionally disabled because
+                // current direction uses vanilla-equivalent input pipeline (grip + configured
+                // binding -> DHH HandleInputDown/Hold/Up), matching flat Inventory behavior.
+                // VrAbilityBarBridge.EnsureAttached(gameObject);
                 VanillaAbilityInputBridge.EnsureAttached(gameObject);
-                Logger.LogInfo("DeathHeadHopperFix-VR bridge ready (spectate head bridge enabled).");
+                Logger.LogInfo($"DeathHeadHopperFix-VR bridge ready (spectate head bridge enabled). build={BuildStamp}");
             }
             else
             {

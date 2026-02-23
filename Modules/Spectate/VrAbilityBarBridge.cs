@@ -60,7 +60,6 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
             var go = new GameObject("DeathHeadHopperVRBridge_VrAbilityBridge");
             DontDestroyOnLoad(go);
-            go.transform.SetParent(host.transform, false);
             _instance = go.AddComponent<VrAbilityBarBridge>();
         }
 

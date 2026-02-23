@@ -118,9 +118,9 @@
 	</Target>
 
 	<Target Name="PostBuildThunderstoreZip" AfterTargets="Build" Condition="Exists('..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge')">
-		<MakeDir Directories="..\00ThunderstoreUpload\_zips" />
-		<Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge\*' -DestinationPath '..\00ThunderstoreUpload\_zips\$(ThunderstoreZipFileName)' -Force&quot;" />
-		<Message Text="Created ..\00ThunderstoreUpload\_zips\$(ThunderstoreZipFileName)" Importance="high" />
+		<MakeDir Directories="..\00ThunderstoreUpload\Zip" />
+		<Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '..\00ThunderstoreUpload\AdrenSnyder-DeathHeadHopperVRBridge\*' -DestinationPath '..\00ThunderstoreUpload\Zip\$(ThunderstoreZipFileName)' -Force&quot;" />
+		<Message Text="Created ..\00ThunderstoreUpload\Zip\$(ThunderstoreZipFileName)" Importance="high" />
 	</Target>
 
 </Project>

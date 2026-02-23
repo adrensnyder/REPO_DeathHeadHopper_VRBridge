@@ -48,7 +48,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return true;
             }
 
-            if (FeatureFlags.DebugSpectateGuard && LogLimiter.Allow("MovementGuard.Override", 0.25f))
+            if (InternalDebugConfig.DebugSpectateGuard && LogLimiter.Allow("MovementGuard.Override", 0.25f))
             {
                 Log.LogDebug($"{SpectateHeadBridge.ModuleTag} Movement guard zeroed rotation because grip is not pressed");
             }

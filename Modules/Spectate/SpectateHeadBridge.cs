@@ -3,6 +3,7 @@
 using System;
 using System.Reflection;
 using BepInEx.Logging;
+using DeathHeadHopper.Managers;
 using DeathHeadHopper.DeathHead;
 using DeathHeadHopperVRBridge.Modules.Config;
 using DeathHeadHopperVRBridge.Modules.Logging;
@@ -27,6 +28,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             ActionsType?.GetProperty("Item", new[] { typeof(string) });
         private static readonly FieldInfo? PlayerDeathHeadGrabField =
             AccessTools.Field(typeof(PlayerDeathHead), "physGrabObject");
+        private static readonly FieldInfo? PlayerDeathHeadTriggeredField =
+            AccessTools.Field(typeof(PlayerDeathHead), "triggered");
         private static Vector3 _baseForward = Vector3.forward;
         private static bool _baseForwardSet;
         private static readonly string[] LeftGripBindings = { "GripLeft", "leftGrip", "Grab", "MapGrabLeft" };
@@ -59,13 +62,13 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             var gripPressed = IsGripPressed();
-            if (FeatureFlags.DebugHeadAlignment && LogLimiter.Allow(nameof(AlignHeadCamera), 0.25f))
+            if (InternalDebugConfig.DebugHeadAlignment && LogLimiter.Allow(nameof(AlignHeadCamera), 0.25f))
             {
                 Log.LogDebug($"{ModuleTag} AlignHeadCamera force={force} gripPressed={gripPressed}");
             }
             if (!force && gripPressed)
             {
-                if (FeatureFlags.DebugHeadAlignment && LogLimiter.Allow("HeadAlignmentGuard", 0.5f))
+                if (InternalDebugConfig.DebugHeadAlignment && LogLimiter.Allow("HeadAlignmentGuard", 0.5f))
                 {
                     Log.LogInfo($"{ModuleTag} alignment skipped because grip is pressed");
                 }
@@ -131,7 +134,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 var action = GetAction(binding);
                 if (IsActionPressed(action))
                 {
-                    if (FeatureFlags.DebugHeadAlignment && LogLimiter.Allow(nameof(IsGripPressed), 0.5f))
+                    if (InternalDebugConfig.DebugHeadAlignment && LogLimiter.Allow(nameof(IsGripPressed), 0.5f))
                     {
                         Log.LogDebug($"{ModuleTag} Grip detected on binding {binding} (leftGrip={useLeftGrip}) using {selection}");
                     }
@@ -203,6 +206,60 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             return false;
+        }
+
+        internal static bool IsDhhSpectateContextActive()
+        {
+            if (!VrModeActive)
+            {
+                return false;
+            }
+
+            if (DHHInputManager.instance == null)
+            {
+                return false;
+            }
+
+            var localHead = PlayerAvatar.instance?.playerDeathHead;
+            if (localHead == null || PlayerDeathHeadTriggeredField == null)
+            {
+                return false;
+            }
+
+            return PlayerDeathHeadTriggeredField.GetValue(localHead) as bool? ?? false;
+        }
+
+        internal static bool IsLocalDeathHeadTriggered()
+        {
+            if (!VrModeActive || DHHInputManager.instance == null)
+            {
+                return false;
+            }
+
+            var localHead = PlayerAvatar.instance?.playerDeathHead;
+            if (localHead == null || PlayerDeathHeadTriggeredField == null)
+            {
+                return false;
+            }
+
+            return PlayerDeathHeadTriggeredField.GetValue(localHead) as bool? ?? false;
+        }
+
+        internal static bool IsDhhRuntimeInputContextActive()
+        {
+            if (!VrModeActive || DHHInputManager.instance == null)
+            {
+                return false;
+            }
+
+            // Primary path: explicit DHH runtime state on local death-head.
+            if (IsDhhSpectateContextActive())
+            {
+                return true;
+            }
+
+            // Fallback path: DHH input manager is active and we are in head spectate context.
+            return IsSpectatingHead();
         }
 
         internal static Transform? GetAlignedCameraTransform()
@@ -289,7 +346,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void TraceAlignment(string message)
         {
-            if (!FeatureFlags.DebugHeadAlignment || !LogLimiter.Allow("AlignTrace", 0.5f))
+            if (!InternalDebugConfig.DebugHeadAlignment || !LogLimiter.Allow("AlignTrace", 0.5f))
             {
                 return;
             }
@@ -299,7 +356,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void LogImmediate(string message)
         {
-            if (!FeatureFlags.DebugHeadAlignment)
+            if (!InternalDebugConfig.DebugHeadAlignment)
             {
                 return;
             }
@@ -309,7 +366,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private static void LogAnchorCameraState(string message, SpectateCamera? spectate)
         {
-            if (!FeatureFlags.DebugHeadAlignment)
+            if (!InternalDebugConfig.DebugHeadAlignment)
             {
                 return;
             }
@@ -350,7 +407,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             SpectateHeadBridge.TraceAlignment("SpectateCamera.StateHead Postfix triggered");
             SpectateHeadBridge.LogImmediate("SpectateCamera.StateHead Postfix triggered");
-            if (FeatureFlags.DebugHeadAlignment && LogLimiter.Allow("StateHead.Enter", 0.5f))
+            if (InternalDebugConfig.DebugHeadAlignment && LogLimiter.Allow("StateHead.Enter", 0.5f))
             {
                 SpectateHeadBridge.Log.LogDebug($"{SpectateHeadBridge.ModuleTag} SpectateCamera.StateHead entered, queuing head alignment");
             }
@@ -424,7 +481,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         static bool Prefix()
         {
             var grip = SpectateHeadBridge.IsGripPressedForCamera();
-            if (FeatureFlags.DebugHeadAlignment && LogLimiter.Allow("HeadCameraTurnGuard", 0.5f))
+            if (InternalDebugConfig.DebugHeadAlignment && LogLimiter.Allow("HeadCameraTurnGuard", 0.5f))
             {
                 SpectateHeadBridge.Log.LogDebug($"{SpectateHeadBridge.ModuleTag} HeadCameraTurnPatch guard gripPressed={grip}");
             }

@@ -46,26 +46,25 @@ namespace DeathHeadHopperVRBridge.Modules.Config
         [FeatureConfigEntry("Spectate VR Ability", "Action token used to activate the selected slot. Preferred values are InputKey names (for example: Chat, Jump, Crouch, Interact, Push; @Chat and InputKey.Chat are also valid). Movement/Turn/Map/Grip actions are ignored.",
             Options = new[]
             {
-                "Chat",
-                "Jump",
-                "Crouch",
-                "Interact",
-                "Push",
+                "VR Actions/CustomJump",
+                "VR Actions/CustomChat",
+                "VR Actions/CustomCrouch",
                 "VR Actions/ResetHeight",
             }, HostControlled = false)]
-        public static string AbilityActivateAction = "Chat";
+        public static string AbilityActivateAction = "VR Actions/ResetHeight";
 
         [FeatureConfigEntry("Spectate VR Direction", "Action token used to activate slot 2. Preferred values are InputKey names (for example: Jump, Chat, Crouch, Interact, Push; @Jump and InputKey.Jump are also valid). Movement/Turn/Map/Grip actions are ignored.",
             Options = new[]
             {
-                "Jump",
-                "Chat",
-                "Crouch",
-                "Interact",
-                "Push",
+                "VR Actions/CustomJump",
+                "VR Actions/CustomChat",
+                "VR Actions/CustomCrouch",
                 "VR Actions/ResetHeight",
             }, HostControlled = false)]
-        public static string AbilityDirectionAction = "Jump";
+        public static string AbilityDirectionAction = "VR Actions/CustomJump";
+
+        [FeatureConfigEntry("Spectate VR Direction", "Target ability slot for Spectate VR Direction action. 2=middle slot, 3=right slot.", Min = 2f, Max = 3f, HostControlled = false)]
+        public static int AbilityDirectionSlot = 2;
 
         [FeatureConfigEntry("Spectate VR Ability", "Distance in meters at which the VR ability cursor floats in front of the view.", Min = 0.2f, Max = 2f, HostControlled = false)]
         public static float AbilityCursorDistance = 0.6f;
@@ -93,13 +92,5 @@ namespace DeathHeadHopperVRBridge.Modules.Config
 
         // Master switch for the spectate -> vanilla ability input bridge.
         public static bool EnableVanillaAbilityBridge = true;
-        // Enables extra logs for spectate movement guard state transitions and gating.
-        public static bool DebugSpectateGuard = false;
-        // Enables verbose logs for movement direction source/resolution decisions.
-        public static bool DebugMovementDirection = false;
-        // Logs raw controller orientation samples used during movement/aim calculations.
-        public static bool LogControllerOrientation = false;
-        // Enables logs related to head-camera alignment and correction behavior.
-        public static bool DebugHeadAlignment = false;
     }
 }

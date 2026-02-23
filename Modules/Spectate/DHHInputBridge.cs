@@ -22,7 +22,6 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         private static readonly FieldInfo? RepoXRRightInteractorField = AccessTools.Field(typeof(XRRayInteractorManager), "rightInteractor");
         private static readonly FieldInfo? JumpBufferTimerField = AccessTools.Field(typeof(DeathHeadHopper.DeathHead.Handlers.JumpHandler), "jumpBufferTimer");
         private static readonly FieldInfo? JumpCooldownTimerField = AccessTools.Field(typeof(DeathHeadHopper.DeathHead.Handlers.JumpHandler), "jumpCooldownTimer");
-        private static readonly FieldInfo? SpectatePlayerField = AccessTools.Field(typeof(SpectateCamera), "player");
 
         internal static readonly ManualLogSource Log = MovementAnalog.Log;
         internal const string ModuleTag = MovementAnalog.ModuleTag;
@@ -35,7 +34,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void UpdateCameraReference(DHHInputManager instance)
         {
-            if (instance == null || !SpectateHeadBridge.IsSpectatingHead())
+            if (instance == null || !SpectateHeadBridge.IsDhhRuntimeInputContextActive())
             {
                 return;
             }
@@ -105,7 +104,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void LogMovement(Vector2 selected, Vector2 legacy, bool analogUsed, Vector3 direction, MovementDirectionSource source)
         {
-            if (!FeatureFlags.DebugMovementDirection || !LogLimiter.Allow("MovementInput", 0.5f))
+            if (!InternalDebugConfig.DebugMovementDirection || !LogLimiter.Allow("MovementInput", 0.5f))
             {
                 return;
             }
@@ -168,20 +167,23 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static bool ShouldSuppressLegacyMovement()
         {
+            // Movement suppression must also cover the DHHF fallback path that reads
+            // SemiFunc.InputMovementX/Y directly while the local death-head is triggered.
+            if (!SpectateHeadBridge.IsDhhRuntimeInputContextActive() && !SpectateHeadBridge.IsLocalDeathHeadTriggered())
+            {
+                return false;
+            }
+
             if (!SpectateHeadBridge.IsGripPressedForCamera())
             {
                 return false;
             }
 
-            var spectate = SpectateCamera.instance;
-            var local = PlayerAvatar.instance;
-            if (spectate == null || local == null)
+            if (InternalDebugConfig.DebugSpectateGuard && LogLimiter.Allow("MovementGuard.LegacySuppressed", 0.2f))
             {
-                return false;
+                Log.LogInfo($"{ModuleTag} Legacy movement suppressed while spectating head because camera grip is held.");
             }
-
-            var target = SpectatePlayerField?.GetValue(spectate) as PlayerAvatar;
-            return target != null && target != local;
+            return true;
         }
 
         private static Vector3 GetHeadAimForward()
@@ -428,6 +430,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                     if (selectedVisual != null)
                     {
                         selectedVisual.enabled = true;
+                        ApplyActiveVisualStyle(selectedVisual, Mathf.Max(1f, FeatureFlags.ControllerRayLineLength));
                     }
                 }
             }
@@ -455,14 +458,14 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             var configuredLength = Mathf.Max(1f, FeatureFlags.ControllerRayLineLength);
-            selectedVisual.lineLength = configuredLength;
+            ApplyActiveVisualStyle(selectedVisual, configuredLength);
 
             if (TryGetNonSelectedRepoXRInteractor(selectedInteractor, out var nonSelectedInteractor) && nonSelectedInteractor != null)
             {
                 var nonSelectedVisual = nonSelectedInteractor.GetComponent<XRInteractorLineVisual>();
                 if (nonSelectedVisual != null)
                 {
-                    nonSelectedVisual.lineLength = 1f;
+                    ApplyInactiveVisualStyle(nonSelectedVisual);
                 }
             }
 
@@ -489,7 +492,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 var activeVisual = activeInteractor.GetComponent<XRInteractorLineVisual>();
                 if (activeVisual != null)
                 {
-                    activeVisual.lineLength = 20f;
+                    ApplyActiveVisualStyle(activeVisual, 20f);
                 }
             }
 
@@ -498,7 +501,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 var nonActiveVisual = nonActiveInteractor.GetComponent<XRInteractorLineVisual>();
                 if (nonActiveVisual != null)
                 {
-                    nonActiveVisual.lineLength = 1f;
+                    ApplyInactiveVisualStyle(nonActiveVisual);
                 }
             }
 
@@ -537,9 +540,81 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return false;
         }
 
+        private static void ApplyActiveVisualStyle(XRInteractorLineVisual visual, float lineLength)
+        {
+            if (visual == null)
+            {
+                return;
+            }
+
+            visual.lineLength = Mathf.Max(1f, lineLength);
+            visual.invalidColorGradient = CreateGradient(0.2f, 0.2f);
+            visual.validColorGradient = CreateGradient(1f, 1f);
+        }
+
+        private static void ApplyInactiveVisualStyle(XRInteractorLineVisual visual)
+        {
+            if (visual == null)
+            {
+                return;
+            }
+
+            visual.lineLength = 1f;
+            var gradient = CreateGradient(0.05f, 0f, 0.8f, 0.05f, 1f);
+            visual.invalidColorGradient = gradient;
+            visual.validColorGradient = gradient;
+        }
+
+        private static Gradient CreateGradient(float startAlpha, float endAlpha)
+        {
+            return CreateGradient(startAlpha, endAlpha, -1f, -1f, -1f);
+        }
+
+        private static Gradient CreateGradient(float startAlpha, float endAlpha, float middleTime, float middleAlpha, float finalTime)
+        {
+            var gradient = new Gradient();
+            gradient.mode = GradientMode.Blend;
+
+            GradientAlphaKey[] alphaKeys;
+            if (middleTime >= 0f && middleAlpha >= 0f && finalTime >= 0f)
+            {
+                alphaKeys = new[]
+                {
+                    new GradientAlphaKey(startAlpha, 0f),
+                    new GradientAlphaKey(middleAlpha, middleTime),
+                    new GradientAlphaKey(endAlpha, finalTime)
+                };
+            }
+            else
+            {
+                alphaKeys = new[]
+                {
+                    new GradientAlphaKey(startAlpha, 0f),
+                    new GradientAlphaKey(endAlpha, 1f)
+                };
+            }
+
+            gradient.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(Color.white, 0f),
+                    new GradientColorKey(Color.white, 1f)
+                },
+                alphaKeys);
+
+            return gradient;
+        }
+
         private static bool TryGetVisualizedRepoXRInteractor(out XRRayInteractor? interactor)
         {
             interactor = null;
+            if (SpectateHeadBridge.IsSpectatingHead() && UsesAnyControllerRay())
+            {
+                // In DeathHead controller-ray mode the visualized line must follow the configured hand,
+                // not RepoXR's active UI interactor state which can change on button presses.
+                return TryGetRepoXRInteractor(GetUnifiedRaycastGripSelection(), out interactor);
+            }
+
             var manager = XRRayInteractorManager.Instance;
             if (manager == null)
             {
@@ -547,12 +622,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             interactor = manager.GetActiveInteractor().Item1;
-            if (interactor != null)
-            {
-                return true;
-            }
-
-            return TryGetRepoXRInteractor(GetUnifiedRaycastGripSelection(), out interactor);
+            return interactor != null;
         }
 
         private static bool TryGetRaySource(bool useControllerSource, GripSelection controllerPreference, out Vector3 sourcePosition, out Vector3 sourceForward, out string sourceLabel)
@@ -605,8 +675,15 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             var useLeft = GripSelectionHelper.ShouldUseLeft(preference);
-            var field = useLeft ? RepoXRLeftInteractorField : RepoXRRightInteractorField;
-            interactor = field?.GetValue(manager) as XRRayInteractor;
+            var preferredField = useLeft ? RepoXRLeftInteractorField : RepoXRRightInteractorField;
+            interactor = preferredField?.GetValue(manager) as XRRayInteractor;
+            if (interactor != null)
+            {
+                return true;
+            }
+
+            var fallbackField = useLeft ? RepoXRRightInteractorField : RepoXRLeftInteractorField;
+            interactor = fallbackField?.GetValue(manager) as XRRayInteractor;
             if (interactor != null)
             {
                 return true;
@@ -837,7 +914,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
     {
         static bool Prefix(ref Vector3 __result)
         {
-            if (!SpectateHeadBridge.IsSpectatingHead())
+            if (!SpectateHeadBridge.IsDhhRuntimeInputContextActive())
             {
                 return true;
             }
@@ -910,7 +987,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
     {
         static bool Prefix(ref float __result)
         {
-            if (!SpectateHeadBridge.IsSpectatingHead())
+            if (!SpectateHeadBridge.IsDhhRuntimeInputContextActive() && !SpectateHeadBridge.IsLocalDeathHeadTriggered())
             {
                 return true;
             }
@@ -936,7 +1013,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
     {
         static bool Prefix(ref float __result)
         {
-            if (!SpectateHeadBridge.IsSpectatingHead())
+            if (!SpectateHeadBridge.IsDhhRuntimeInputContextActive() && !SpectateHeadBridge.IsLocalDeathHeadTriggered())
             {
                 return true;
             }
@@ -957,6 +1034,70 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         }
     }
 
+    [HarmonyPatch(typeof(SemiFunc), "InputDown")]
+    internal static class SemiFuncInputDownDirectionBindingSuppressionPatch
+    {
+        static bool Prefix(InputKey key, ref bool __result)
+        {
+            var gripPressed = SpectateHeadBridge.IsGripPressedForAbility();
+            VanillaAbilityInputBridge.NotifyDirectionBindingAttempt(key, gripPressed);
+            if (InternalDebugConfig.DebugAbilityInputFlow
+                && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                && gripPressed
+                && VanillaAbilityInputBridge.IsDebugBurstLoggingActive()
+                && VanillaAbilityInputBridge.TryGetConfiguredDirectionInputKey(out var configuredKey)
+                && key == configuredKey
+                && LogLimiter.Allow("AbilityFlow.InputDownObserved", 0.2f))
+            {
+                DHHInputBridge.Log.LogInfo($"{DHHInputBridge.ModuleTag} InputDown observed for configured direction binding key. grip={gripPressed} {VanillaAbilityInputBridge.GetDirectionSuppressionDebugState(key)}");
+            }
+
+            if (VanillaAbilityInputBridge.ShouldSuppressDirectionBindingInputDownThisFrame(key))
+            {
+                if (InternalDebugConfig.DebugAbilityInputFlow
+                    && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                    && LogLimiter.Allow("AbilityFlow.SuppressApplied", 0.2f))
+                {
+                    DHHInputBridge.Log.LogInfo($"{DHHInputBridge.ModuleTag} Suppressed SemiFunc.InputDown({key}) for direction-slot redirect.");
+                }
+                __result = false;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(SemiFunc), "InputHold")]
+    internal static class SemiFuncInputHoldDirectionBindingSuppressionPatch
+    {
+        static bool Prefix(InputKey key, ref bool __result)
+        {
+            if (VanillaAbilityInputBridge.ShouldSuppressDirectionBindingInputHoldThisFrame(key))
+            {
+                __result = false;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(SemiFunc), "InputUp")]
+    internal static class SemiFuncInputUpDirectionBindingSuppressionPatch
+    {
+        static bool Prefix(InputKey key, ref bool __result)
+        {
+            if (VanillaAbilityInputBridge.ShouldSuppressDirectionBindingInputUpThisFrame(key))
+            {
+                __result = false;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
     [HarmonyPatch(typeof(SpectateCamera), "LateUpdate")]
     internal static class SpectateCameraLateUpdateControllerRayPreviewPatch
     {
@@ -974,7 +1115,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         static void Postfix(DHHInputManager __instance)
         {
-            if (__instance == null || !SpectateHeadBridge.IsSpectatingHead())
+            if (__instance == null || !SpectateHeadBridge.IsDhhRuntimeInputContextActive())
             {
                 return;
             }
@@ -985,8 +1126,13 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            // Keep updating jump direction while button is held, so each new jump uses current raycast.
-            if (!SemiFunc.InputHold((InputKey)1))
+            if (VanillaAbilityInputBridge.IsDirectionAbilityActive())
+            {
+                return;
+            }
+
+            // Keep updating direction while the configured direction InputKey binding is held.
+            if (!VanillaAbilityInputBridge.IsDirectionBindingHeld())
             {
                 return;
             }

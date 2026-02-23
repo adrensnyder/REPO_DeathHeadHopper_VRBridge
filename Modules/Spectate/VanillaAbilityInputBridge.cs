@@ -30,14 +30,16 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             RepoXRInputSystemType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static);
         private static readonly PropertyInfo? RepoXRInputSystemActions =
             RepoXRInputSystemType?.GetProperty("Actions", BindingFlags.Public | BindingFlags.Instance);
+        private static readonly PropertyInfo? RepoXRInputSystemCurrentControlScheme =
+            RepoXRInputSystemType?.GetProperty("CurrentControlScheme", BindingFlags.Public | BindingFlags.Instance);
 
-        private static readonly Type? InputActionType = AccessTools.TypeByName("UnityEngine.InputSystem.InputAction");
+        private static readonly Type? InputActionRuntimeType = AccessTools.TypeByName("UnityEngine.InputSystem.InputAction");
         private static readonly MethodInfo? WasPressedMethod =
-            InputActionType?.GetMethod("WasPressedThisFrame", Type.EmptyTypes);
+            InputActionRuntimeType?.GetMethod("WasPressedThisFrame", Type.EmptyTypes);
         private static readonly MethodInfo? WasReleasedMethod =
-            InputActionType?.GetMethod("WasReleasedThisFrame", Type.EmptyTypes);
+            InputActionRuntimeType?.GetMethod("WasReleasedThisFrame", Type.EmptyTypes);
         private static readonly MethodInfo? IsPressedMethod =
-            InputActionType?.GetMethod("IsPressed", Type.EmptyTypes);
+            InputActionRuntimeType?.GetMethod("IsPressed", Type.EmptyTypes);
 
         private static readonly PropertyInfo? DhhInstanceProperty = AccessTools.Property(typeof(DHHAbilityManager), "instance");
         private static readonly FieldInfo? AbilitySpotsField = AccessTools.Field(typeof(DHHAbilityManager), "abilitySpots");
@@ -87,12 +89,42 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         internal const string ModuleTag = "[DeathHeadHopperFix-VR] [VanillaAbility]";
 
         private static VanillaAbilityInputBridge? _instance;
+        private static readonly Dictionary<InputKey, CustomInputActionEntry> CustomInputActions = new();
+        private static float s_debugBurstUntilTime = -1f;
 
         private AbilitySpot? _slotDownSpot;
         private object? _activeAction;
+        private InputKey? _activeInputKey;
         private Quaternion? _savedAvatarRotation;
+        private int _activeSlotIndex = -1;
         private const int PrimarySlotIndex = 0;
-        private const int DirectionSlotIndex = 1;
+        private static int s_suppressDirectionBindingDownFrame = -1;
+        private static int s_suppressDirectionBindingUpFrame = -1;
+
+        private readonly struct RuntimeInputBindingResolution
+        {
+            internal RuntimeInputBindingResolution(InputKey key, InputAction action, int bindingIndex, string controlScheme, string effectivePath)
+            {
+                Key = key;
+                Action = action;
+                BindingIndex = bindingIndex;
+                ControlScheme = controlScheme;
+                EffectivePath = effectivePath;
+            }
+
+            internal InputKey Key { get; }
+            internal InputAction Action { get; }
+            internal int BindingIndex { get; }
+            internal string ControlScheme { get; }
+            internal string EffectivePath { get; }
+        }
+
+        private sealed class CustomInputActionEntry
+        {
+            internal InputAction Action = null!;
+            internal string EffectivePath = string.Empty;
+            internal string ControlScheme = string.Empty;
+        }
 
         public static void EnsureAttached(GameObject host)
         {
@@ -103,7 +135,18 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
             var go = new GameObject("DeathHeadHopperVRBridge_VanillaAbilityBridge");
             DontDestroyOnLoad(go);
-            go.transform.SetParent(host.transform, false);
+            _instance = go.AddComponent<VanillaAbilityInputBridge>();
+        }
+
+        private static void EnsureAttachedRuntime()
+        {
+            if (_instance != null)
+            {
+                return;
+            }
+
+            var go = new GameObject("DeathHeadHopperVRBridge_VanillaAbilityBridge");
+            DontDestroyOnLoad(go);
             _instance = go.AddComponent<VanillaAbilityInputBridge>();
         }
 
@@ -111,18 +154,22 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             if (!FeatureFlags.EnableVanillaAbilityBridge)
             {
+                LogCoreFlow("Core.Disabled", "Update skipped: EnableVanillaAbilityBridge=false");
                 ReleaseAbility();
                 return;
             }
 
-            if (!SpectateHeadBridge.IsSpectatingHead())
+            if (!IsAbilityRuntimeContextActive())
             {
+                LogInputFlow("CtxOff",
+                    $"Ability context inactive. runtime={SpectateHeadBridge.IsDhhRuntimeInputContextActive()} localTriggered={SpectateHeadBridge.IsLocalDeathHeadTriggered()} spectatingHead={SpectateHeadBridge.IsSpectatingHead()}");
                 ReleaseAbility();
                 return;
             }
 
             if (!TryPrepareSpots(out var spots))
             {
+                LogCoreFlow("Core.PrepareFail", "Update skipped: TryPrepareSpots returned false");
                 ReleaseAbility();
                 return;
             }
@@ -140,22 +187,29 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             var manager = GetAbilityManager();
             if (manager == null)
             {
+                LogCoreFlow("Prepare.NoManager", "TryPrepareSpots: DHHAbilityManager.instance is null");
                 return false;
             }
 
             if (!ManagerHasEquipped(manager))
             {
+                LogCoreFlow("Prepare.NoEquipped", "TryPrepareSpots: HasEquippedAbility=false");
                 return false;
             }
 
             spots = GetAbilitySpots(manager);
             if (spots == null || spots.Length == 0)
             {
+                LogCoreFlow("Prepare.NoSpots", $"TryPrepareSpots: spots invalid (null={spots == null}, len={(spots?.Length ?? 0)})");
                 return false;
             }
 
             var primarySpot = GetAbilitySpot(spots, PrimarySlotIndex);
-            var directionSpot = GetAbilitySpot(spots, DirectionSlotIndex);
+            var directionSlotIndex = GetDirectionSlotIndex();
+            var directionSpot = GetAbilitySpot(spots, directionSlotIndex);
+            LogInputFlow("SpotsState",
+                $"spotsFeched={spots.Length > 0} slot1Ability={(primarySpot?.CurrentAbility?.GetType().Name ?? "none")} slot{directionSlotIndex + 1}Ability={(directionSpot?.CurrentAbility?.GetType().Name ?? "none")}",
+                0.25f);
             if ((primarySpot == null || primarySpot.CurrentAbility == null)
                 && (directionSpot == null || directionSpot.CurrentAbility == null))
             {
@@ -168,8 +222,31 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private void HandleActivation(AbilitySpot[] spots, bool allowStart)
         {
+            var directionSlotIndex = GetDirectionSlotIndex();
+            var directionSlotLabel = $"slot {directionSlotIndex + 1}";
             var slot1Spot = GetAbilitySpot(spots, PrimarySlotIndex);
-            var slot2Spot = GetAbilitySpot(spots, DirectionSlotIndex);
+            var slot2Spot = GetAbilitySpot(spots, directionSlotIndex);
+            var slot1InputKey = TryResolveConfiguredInputKey(FeatureFlags.AbilityActivateAction, out var parsedSlot1Key) ? parsedSlot1Key : (InputKey?)null;
+            var slot2InputKey = TryResolveConfiguredInputKey(FeatureFlags.AbilityDirectionAction, out var parsedSlot2Key) ? parsedSlot2Key : (InputKey?)null;
+            RuntimeInputBindingResolution slot1RuntimeBinding = default;
+            var slot1RuntimeBindingResolved = slot1InputKey.HasValue && TryResolveRuntimeBindingForInputKey(slot1InputKey.Value, out slot1RuntimeBinding);
+            RuntimeInputBindingResolution slot2RuntimeBinding = default;
+            var slot2RuntimeBindingResolved = slot2InputKey.HasValue && TryResolveRuntimeBindingForInputKey(slot2InputKey.Value, out slot2RuntimeBinding);
+            if (slot1RuntimeBindingResolved)
+            {
+                LogInputFlow("RuntimeBindingResolve",
+                    $"slot1Key={slot1RuntimeBinding.Key} action={slot1RuntimeBinding.Action.name} scheme={(string.IsNullOrEmpty(slot1RuntimeBinding.ControlScheme) ? "none" : slot1RuntimeBinding.ControlScheme)} bindingIndex={slot1RuntimeBinding.BindingIndex} path={(string.IsNullOrEmpty(slot1RuntimeBinding.EffectivePath) ? "none" : slot1RuntimeBinding.EffectivePath)}",
+                    0.5f);
+            }
+            if (slot2RuntimeBindingResolved)
+            {
+                LogInputFlow("RuntimeBindingResolve",
+                    $"slot{directionSlotIndex + 1}Key={slot2RuntimeBinding.Key} action={slot2RuntimeBinding.Action.name} scheme={(string.IsNullOrEmpty(slot2RuntimeBinding.ControlScheme) ? "none" : slot2RuntimeBinding.ControlScheme)} bindingIndex={slot2RuntimeBinding.BindingIndex} path={(string.IsNullOrEmpty(slot2RuntimeBinding.EffectivePath) ? "none" : slot2RuntimeBinding.EffectivePath)}",
+                    0.5f);
+            }
+            LogInputFlow("BindingSelection",
+                $"slot1Config='{FeatureFlags.AbilityActivateAction}' slot1Key={(slot1InputKey?.ToString() ?? "none")} slot1HasAbility={(slot1Spot?.CurrentAbility != null)} " +
+                $"slot{directionSlotIndex + 1}Config='{FeatureFlags.AbilityDirectionAction}' slot{directionSlotIndex + 1}Key={(slot2InputKey?.ToString() ?? "none")} slot{directionSlotIndex + 1}HasAbility={(slot2Spot?.CurrentAbility != null)}");
 
             // Resolve each input action only for slots that currently have an equipped ability.
             // This bridge reads input state and never consumes/cancels the underlying action.
@@ -177,7 +254,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 ? ResolveAction(FeatureFlags.AbilityActivateAction, "ActivateAction", "slot 1", PrimarySlotIndex)
                 : null;
             var slot2Action = (slot2Spot != null && slot2Spot.CurrentAbility != null)
-                ? ResolveAction(FeatureFlags.AbilityDirectionAction, "DirectionAction", "slot 2", DirectionSlotIndex)
+                ? ResolveAction(FeatureFlags.AbilityDirectionAction, "DirectionAction", directionSlotLabel, directionSlotIndex)
                 : null;
 
             if (_slotDownSpot != null && _activeAction != null)
@@ -185,10 +262,21 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 if (IsActionPressed(_activeAction))
                 {
                     InvokeAbilityMethod(HandleInputHoldMethod, _slotDownSpot);
-                    LogDebug("AbilityHold", $"Holding active ability slot ({_slotDownSpot.CurrentAbility?.GetType().Name ?? "none"})", 0.5f);
+                    LogDebug("AbilityHold", $"Holding active ability slot ({_slotDownSpot.CurrentAbility?.GetType().Name ?? "none"})", 30);
                 }
 
                 if (WasActionReleased(_activeAction))
+                {
+                    ReleaseAbility();
+                }
+            }
+            else if (_slotDownSpot != null && _activeInputKey.HasValue)
+            {
+                if (SemiFunc.InputHold(_activeInputKey.Value))
+                {
+                    InvokeAbilityMethod(HandleInputHoldMethod, _slotDownSpot);
+                }
+                else
                 {
                     ReleaseAbility();
                 }
@@ -199,15 +287,30 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return;
             }
 
-            if (slot1Spot != null && slot1Spot.CurrentAbility != null && slot1Action != null && WasActionPressed(slot1Action))
+            var slot1Triggered = IsActionTriggeredThisFrame(slot1Action, FeatureFlags.AbilityActivateAction);
+            var preferConfiguredVrAction = ContainsExplicitVrActionToken(FeatureFlags.AbilityDirectionAction);
+            object? slot2TriggerAction;
+            if (preferConfiguredVrAction)
+            {
+                slot2TriggerAction = slot2Action ?? (slot2RuntimeBindingResolved ? slot2RuntimeBinding.Action : null);
+            }
+            else
+            {
+                slot2TriggerAction = slot2RuntimeBindingResolved ? slot2RuntimeBinding.Action : slot2Action;
+            }
+            var slot2Triggered = IsActionTriggeredThisFrame(slot2TriggerAction, FeatureFlags.AbilityDirectionAction);
+            LogInputFlow("TriggerState",
+                $"Grip={allowStart} slot1={slot1Triggered} slot{directionSlotIndex + 1}={slot2Triggered} slot1Action={(slot1Action != null)} slot{directionSlotIndex + 1}Action={(slot2Action != null)} slot{directionSlotIndex + 1}RuntimeAction={slot2RuntimeBindingResolved} slot{directionSlotIndex + 1}PreferVrAction={preferConfiguredVrAction} slot1Key={(slot1InputKey?.ToString() ?? "none")} slot{directionSlotIndex + 1}Key={(slot2InputKey?.ToString() ?? "none")}");
+
+            if (slot1Spot != null && slot1Spot.CurrentAbility != null && slot1Triggered && (slot1Action != null || slot1InputKey.HasValue))
             {
                 LogDebug("ActivateActionTriggered", "Configured activate action triggered direct activation of slot 1 while DeathHeadHopper is active.");
-                StartAbility(slot1Spot, slot1Action, PrimarySlotIndex);
+                StartAbility(slot1Spot, slot1Action, PrimarySlotIndex, slot1InputKey);
             }
-            else if (slot2Spot != null && slot2Spot.CurrentAbility != null && slot2Action != null && WasActionPressed(slot2Action))
+            else if (slot2Spot != null && slot2Spot.CurrentAbility != null && slot2Triggered && (slot2Action != null || slot2InputKey.HasValue))
             {
-                LogDebug("DirectionActionTriggered", "Configured direction action triggered activation for slot 2 while DeathHeadHopper is active.");
-                StartAbility(slot2Spot, slot2Action, DirectionSlotIndex);
+                LogDebug("DirectionActionTriggered", $"Configured direction action triggered activation for {directionSlotLabel} while DeathHeadHopper is active.");
+                StartAbility(slot2Spot, slot2Action, directionSlotIndex, slot2InputKey);
             }
         }
 
@@ -235,13 +338,25 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return action;
         }
 
-        private void StartAbility(AbilitySpot spot, object action, int slotIndex)
+        private void StartAbility(AbilitySpot spot, object? action, int slotIndex, InputKey? inputKey)
         {
             ReleaseAbility();
             AlignAvatarToCamera();
             InvokeAbilityMethod(HandleInputDownMethod, spot);
             _slotDownSpot = spot;
             _activeAction = action;
+            _activeInputKey = inputKey;
+            _activeSlotIndex = slotIndex;
+            if (slotIndex == GetDirectionSlotIndex())
+            {
+                // Consume configured direction InputDown in the same frame when the direction slot is activated.
+                s_suppressDirectionBindingDownFrame = Time.frameCount;
+                s_suppressDirectionBindingUpFrame = Time.frameCount;
+                LogInputFlow("DirectionSlotStart", $"slot={slotIndex + 1} start frame={Time.frameCount}; suppression armed.");
+            }
+            LogInputFlow("AbilityStart",
+                $"slot={slotIndex} ability={(spot.CurrentAbility?.GetType().Name ?? "none")} actionObj={(action != null)} inputKey={(inputKey?.ToString() ?? "none")} frame={Time.frameCount}",
+                0.15f);
             LogDebug("AbilityStart", $"Started ability slot {slotIndex} ({spot.CurrentAbility?.GetType().Name ?? "none"})");
         }
 
@@ -257,7 +372,174 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             LogDebug("AbilityRelease", $"Released primary ability slot {PrimarySlotIndex}");
             _slotDownSpot = null;
             _activeAction = null;
+            _activeInputKey = null;
+            _activeSlotIndex = -1;
             RestoreAvatarAlignment();
+        }
+
+        internal static bool ShouldSuppressDirectionBindingInputDownThisFrame()
+        {
+            if (_instance == null || !FeatureFlags.EnableVanillaAbilityBridge || !IsAbilityRuntimeContextActive())
+            {
+                return false;
+            }
+
+            return s_suppressDirectionBindingDownFrame == Time.frameCount;
+        }
+
+        internal static bool ShouldSuppressDirectionBindingInputDownThisFrame(InputKey key)
+        {
+            if (!HasDirectionAbilityAvailable())
+            {
+                return false;
+            }
+
+            var hasConfigured = TryGetDirectionInputKey(out var configuredKey);
+            var match = hasConfigured && configuredKey == key;
+            if (!match)
+            {
+                return false;
+            }
+
+            var armedFrame = ShouldSuppressDirectionBindingInputDownThisFrame();
+            var gripSuppression = IsAbilityRuntimeContextActive() && SpectateHeadBridge.IsGripPressedForAbility();
+            var shouldSuppress = armedFrame || gripSuppression;
+            if (ShouldLogAbilityFlow("AbilityFlow.SuppressCheck", 0.2f))
+            {
+                Log.LogInfo($"{ModuleTag} Suppress check: key={key} configured={configuredKey} match={match} armed={armedFrame} gripSuppression={gripSuppression} frame={Time.frameCount}");
+            }
+
+            return shouldSuppress;
+        }
+
+        internal static bool ShouldSuppressDirectionBindingInputHoldThisFrame(InputKey key)
+        {
+            if (!HasDirectionAbilityAvailable())
+            {
+                return false;
+            }
+
+            if (!TryGetDirectionInputKey(out var configuredKey) || configuredKey != key)
+            {
+                return false;
+            }
+
+            return IsAbilityRuntimeContextActive() && SpectateHeadBridge.IsGripPressedForAbility();
+        }
+
+        internal static bool ShouldSuppressDirectionBindingInputUpThisFrame(InputKey key)
+        {
+            if (!HasDirectionAbilityAvailable())
+            {
+                return false;
+            }
+
+            if (!TryGetDirectionInputKey(out var configuredKey) || configuredKey != key)
+            {
+                return false;
+            }
+
+            return s_suppressDirectionBindingUpFrame == Time.frameCount
+                || (IsAbilityRuntimeContextActive() && SpectateHeadBridge.IsGripPressedForAbility());
+        }
+
+        internal static bool IsDirectionAbilityActive()
+        {
+            if (_instance == null || !FeatureFlags.EnableVanillaAbilityBridge || !IsAbilityRuntimeContextActive())
+            {
+                return false;
+            }
+
+            return _instance._activeSlotIndex == GetDirectionSlotIndex()
+                && _instance._slotDownSpot != null
+                && (_instance._activeAction != null || _instance._activeInputKey.HasValue);
+        }
+
+        internal static bool IsDirectionBindingHeld()
+        {
+            if (!HasDirectionAbilityAvailable())
+            {
+                return false;
+            }
+
+            if (!TryGetDirectionInputKey(out var key))
+            {
+                return false;
+            }
+
+            return SemiFunc.InputHold(key);
+        }
+
+
+        internal static bool HasDirectionAbilityAvailable()
+        {
+            if (_instance == null || !FeatureFlags.EnableVanillaAbilityBridge || !IsAbilityRuntimeContextActive())
+            {
+                return false;
+            }
+
+            var manager = GetAbilityManager();
+            if (manager == null || !ManagerHasEquipped(manager))
+            {
+                return false;
+            }
+
+            var spots = GetAbilitySpots(manager);
+            if (spots == null || spots.Length == 0)
+            {
+                return false;
+            }
+
+            var directionSpot = GetAbilitySpot(spots, GetDirectionSlotIndex());
+            var available = directionSpot != null && directionSpot.CurrentAbility != null;
+            if (ShouldLogAbilityFlow("AbilityFlow.DirectionAvailability", 0.5f))
+            {
+                Log.LogInfo($"{ModuleTag} Direction slot availability: slot={GetDirectionSlotIndex() + 1} available={available} ability={(directionSpot?.CurrentAbility?.GetType().Name ?? "none")}");
+            }
+
+            return available;
+        }
+
+        internal static bool TryGetConfiguredDirectionInputKey(out InputKey key)
+        {
+            return TryGetDirectionInputKey(out key);
+        }
+
+        internal static string GetDirectionSuppressionDebugState(InputKey incomingKey)
+        {
+            var abilityEnabled = FeatureFlags.EnableVanillaAbilityBridge;
+            var hasInstance = _instance != null;
+            var contextActive = IsAbilityRuntimeContextActive();
+            var frameArmed = ShouldSuppressDirectionBindingInputDownThisFrame();
+            var hasConfigured = TryGetDirectionInputKey(out var configuredKey);
+            var keyMatch = hasConfigured && configuredKey == incomingKey;
+            var gripPressed = SpectateHeadBridge.IsGripPressedForAbility();
+
+            return $"enabled={abilityEnabled} instance={hasInstance} context={contextActive} armed={frameArmed} grip={gripPressed} incoming={incomingKey} configured={(hasConfigured ? configuredKey.ToString() : "none")} match={keyMatch}";
+        }
+
+        internal static void NotifyDirectionBindingAttempt(InputKey key, bool gripPressed)
+        {
+            if (!InternalDebugConfig.DebugAbilityInputFlow || !SpectateHeadBridge.IsLocalDeathHeadTriggered())
+            {
+                return;
+            }
+
+            if (!gripPressed)
+            {
+                return;
+            }
+
+            if (!TryGetDirectionInputKey(out var configuredKey) || configuredKey != key)
+            {
+                return;
+            }
+
+            s_debugBurstUntilTime = Time.realtimeSinceStartup + 2f;
+            if (LogLimiter.Allow("AbilityFlow.BurstStart", 0.2f))
+            {
+                Log.LogInfo($"{ModuleTag} Debug burst armed for 2.0s on grip+{key}.");
+            }
         }
 
         private static AbilitySpot? GetAbilitySpot(AbilitySpot[] spots, int index)
@@ -379,7 +661,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             action = null;
             label = string.Empty;
-            var token = NormalizeInputKeyToken(rawToken);
+            var useCustomAction = IsCustomInputKeyAliasToken(rawToken);
+            var token = useCustomAction ? NormalizeCustomInputKeyToken(rawToken) : NormalizeInputKeyToken(rawToken);
             if (string.IsNullOrEmpty(token))
             {
                 return false;
@@ -395,21 +678,146 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 return false;
             }
 
+            if (useCustomAction)
+            {
+                if (!TryResolveRuntimeCustomActionForInputKey(parsedKey, out var customAction, out var customLabel))
+                {
+                    return false;
+                }
+
+                action = customAction;
+                label = customLabel;
+                return true;
+            }
+
+            if (!TryResolveRuntimeBindingForInputKey(parsedKey, out var runtimeBinding))
+            {
+                return false;
+            }
+
+            action = runtimeBinding.Action;
+            label = $"InputKey.{parsedKey} [scheme={(string.IsNullOrEmpty(runtimeBinding.ControlScheme) ? "none" : runtimeBinding.ControlScheme)} idx={runtimeBinding.BindingIndex} path={(string.IsNullOrEmpty(runtimeBinding.EffectivePath) ? "none" : runtimeBinding.EffectivePath)}]";
+            return true;
+        }
+
+        private static bool TryResolveRuntimeBindingForInputKey(InputKey key, out RuntimeInputBindingResolution resolution)
+        {
+            resolution = default;
+
             var manager = InputManager.instance;
             if (manager == null)
             {
                 return false;
             }
 
-            var mappedAction = manager.GetAction(parsedKey);
+            var mappedAction = manager.GetAction(key);
             if (mappedAction == null)
             {
                 return false;
             }
 
-            action = mappedAction;
-            label = $"InputKey.{parsedKey}";
+            var currentScheme = string.Empty;
+            try
+            {
+                var inputSystem = RepoXRInputSystemInstance?.GetValue(null);
+                currentScheme = RepoXRInputSystemCurrentControlScheme?.GetValue(inputSystem) as string ?? string.Empty;
+            }
+            catch
+            {
+                currentScheme = string.Empty;
+            }
+
+            var bindingIndex = 0;
+            try
+            {
+                if (!string.IsNullOrEmpty(currentScheme))
+                {
+                    bindingIndex = Mathf.Max(InputActionRebindingExtensions.GetBindingIndex(mappedAction, currentScheme, null), 0);
+                }
+            }
+            catch
+            {
+                bindingIndex = 0;
+            }
+
+            var effectivePath = string.Empty;
+            var bindingsCount = mappedAction.bindings.Count;
+            if (bindingsCount > 0)
+            {
+                if (bindingIndex >= bindingsCount)
+                {
+                    bindingIndex = 0;
+                }
+
+                effectivePath = mappedAction.bindings[bindingIndex].effectivePath ?? string.Empty;
+            }
+
+            resolution = new RuntimeInputBindingResolution(key, mappedAction, bindingIndex, currentScheme, effectivePath);
             return true;
+        }
+
+        private static bool TryResolveRuntimeCustomActionForInputKey(InputKey key, out InputAction action, out string label)
+        {
+            action = null!;
+            label = string.Empty;
+
+            if (!TryResolveRuntimeBindingForInputKey(key, out var runtimeBinding))
+            {
+                return false;
+            }
+
+            var effectivePath = runtimeBinding.EffectivePath;
+            if (string.IsNullOrEmpty(effectivePath))
+            {
+                return false;
+            }
+
+            if (!CustomInputActions.TryGetValue(key, out var entry)
+                || entry.Action == null
+                || !string.Equals(entry.EffectivePath, effectivePath, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(entry.ControlScheme, runtimeBinding.ControlScheme, StringComparison.OrdinalIgnoreCase))
+            {
+                DisposeCustomInputAction(key);
+
+                var customAction = new InputAction($"Custom{key}", UnityEngine.InputSystem.InputActionType.Button, effectivePath, null, null, null);
+                customAction.Enable();
+                entry = new CustomInputActionEntry
+                {
+                    Action = customAction,
+                    EffectivePath = effectivePath,
+                    ControlScheme = runtimeBinding.ControlScheme
+                };
+                CustomInputActions[key] = entry;
+                LogInputFlow("CustomBindingMap",
+                    $"Custom{key} mapped to InputKey.{key}: sourceAction={runtimeBinding.Action.name} scheme={(string.IsNullOrEmpty(runtimeBinding.ControlScheme) ? "none" : runtimeBinding.ControlScheme)} path={effectivePath}",
+                    0.5f);
+            }
+
+            action = entry.Action;
+            label = $"VR Actions/Custom{key} -> InputKey.{key} [scheme={(string.IsNullOrEmpty(runtimeBinding.ControlScheme) ? "none" : runtimeBinding.ControlScheme)} path={effectivePath}]";
+            return true;
+        }
+
+        private static bool IsCustomInputKeyAliasToken(string rawToken)
+        {
+            if (string.IsNullOrWhiteSpace(rawToken))
+            {
+                return false;
+            }
+
+            var token = rawToken.Trim();
+            if (token.StartsWith("@", StringComparison.Ordinal))
+            {
+                token = token.Substring(1);
+            }
+
+            const string vrPrefix = "VR Actions/";
+            if (token.StartsWith(vrPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(vrPrefix.Length);
+            }
+
+            return token.StartsWith("Custom", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string NormalizeInputKeyToken(string rawToken)
@@ -434,6 +842,83 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return token.Trim();
         }
 
+        private static string NormalizeCustomInputKeyToken(string rawToken)
+        {
+            if (string.IsNullOrWhiteSpace(rawToken))
+            {
+                return string.Empty;
+            }
+
+            var token = rawToken.Trim();
+            if (token.StartsWith("@", StringComparison.Ordinal))
+            {
+                token = token.Substring(1);
+            }
+
+            const string vrPrefix = "VR Actions/";
+            if (token.StartsWith(vrPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(vrPrefix.Length);
+            }
+
+            const string customPrefix = "Custom";
+            if (token.StartsWith(customPrefix, StringComparison.OrdinalIgnoreCase) && token.Length > customPrefix.Length)
+            {
+                token = token.Substring(customPrefix.Length);
+            }
+
+            return NormalizeInputKeyToken(token);
+        }
+
+        private static bool TryGetDirectionInputKey(out InputKey key)
+        {
+            key = default;
+            if (TryResolveConfiguredInputKey(FeatureFlags.AbilityDirectionAction, out var parsed))
+            {
+                key = parsed;
+                return true;
+            }
+
+            if (InternalDebugConfig.DebugAbilityInputFlow
+                && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                && LogLimiter.Allow("AbilityFlow.DirectionKeyMissing", 1f))
+            {
+                Log.LogInfo($"{ModuleTag} No InputKey parsed from AbilityDirectionAction='{FeatureFlags.AbilityDirectionAction}'.");
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveConfiguredInputKey(string rawConfig, out InputKey key)
+        {
+            key = default;
+            foreach (var configured in ParseActionNames(rawConfig))
+            {
+                var token = IsCustomInputKeyAliasToken(configured)
+                    ? NormalizeCustomInputKeyToken(configured)
+                    : NormalizeInputKeyToken(configured);
+                if (string.IsNullOrEmpty(token))
+                {
+                    continue;
+                }
+
+                if (!Enum.TryParse<InputKey>(token, true, out var parsedKey))
+                {
+                    continue;
+                }
+
+                if (parsedKey == InputKey.Map)
+                {
+                    continue;
+                }
+
+                key = parsedKey;
+                return true;
+            }
+
+            return false;
+        }
+
         private static bool IsExcludedAction(string candidate)
         {
             if (ExcludedActionNames.Contains(candidate))
@@ -448,6 +933,20 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
                 normalized = normalized.Substring(vrPrefix.Length).Trim();
             }
             return ExcludedActionNames.Contains(normalized);
+        }
+
+        private static bool ContainsExplicitVrActionToken(string rawConfig)
+        {
+            const string vrPrefix = "VR Actions/";
+            foreach (var configured in ParseActionNames(rawConfig))
+            {
+                if (configured.StartsWith(vrPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static IEnumerable<string> DiscoverRepoXRActionNames()
@@ -539,6 +1038,68 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             return InvokeBooleanMethod(IsPressedMethod, action);
         }
 
+        private static bool IsActionTriggeredThisFrame(object? action, string rawConfig)
+        {
+            if (WasActionPressed(action))
+            {
+                if (InternalDebugConfig.DebugAbilityInputFlow
+                    && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                    && LogLimiter.Allow("AbilityFlow.ActionPressed", 0.2f))
+                {
+                    Log.LogInfo($"{ModuleTag} Action pressed this frame via resolved action object. config='{rawConfig}' action={DescribeActionObject(action)}");
+                }
+                return true;
+            }
+
+            foreach (var configured in ParseActionNames(rawConfig))
+            {
+                var token = IsCustomInputKeyAliasToken(configured)
+                    ? NormalizeCustomInputKeyToken(configured)
+                    : NormalizeInputKeyToken(configured);
+                if (string.IsNullOrEmpty(token))
+                {
+                    continue;
+                }
+
+                if (!Enum.TryParse(token, true, out InputKey parsedKey))
+                {
+                    continue;
+                }
+
+                if (parsedKey == InputKey.Map)
+                {
+                    continue;
+                }
+
+                if (SemiFunc.InputDown(parsedKey))
+                {
+                    if (InternalDebugConfig.DebugAbilityInputFlow
+                        && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                        && LogLimiter.Allow("AbilityFlow.InputKeyDown", 0.2f))
+                    {
+                        Log.LogInfo($"{ModuleTag} InputKey trigger detected: {parsedKey} from '{rawConfig}'.");
+                    }
+                    return true;
+                }
+
+                // Read the vanilla key state directly so slot2 trigger detection is not
+                // masked by our own SemiFunc suppression patch.
+                var inputManager = InputManager.instance;
+                if (inputManager != null && inputManager.KeyDown(parsedKey))
+                {
+                    if (InternalDebugConfig.DebugAbilityInputFlow
+                        && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                        && LogLimiter.Allow("AbilityFlow.InputKeyDownRaw", 0.2f))
+                    {
+                        Log.LogInfo($"{ModuleTag} Raw InputManager trigger detected: {parsedKey} from '{rawConfig}'.");
+                    }
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool InvokeBooleanMethod(MethodInfo? method, object? action)
         {
             if (method == null || action == null)
@@ -555,6 +1116,17 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             {
                 return false;
             }
+        }
+
+        private static string DescribeActionObject(object? action)
+        {
+            if (action is InputAction inputAction)
+            {
+                var activePath = inputAction.activeControl?.path ?? "none";
+                return $"name={inputAction.name} activePath={activePath}";
+            }
+
+            return action?.GetType().Name ?? "none";
         }
 
         private static DHHAbilityManager? GetAbilityManager()
@@ -577,16 +1149,46 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             var manager = GetAbilityManager();
             if (method == null || manager == null)
             {
+                if (InternalDebugConfig.DebugAbilityInputFlow
+                    && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                    && LogLimiter.Allow("AbilityFlow.InvokeMissing", 0.5f))
+                {
+                    Log.LogInfo($"{ModuleTag} Invoke skipped: method={(method != null)} manager={(manager != null)}.");
+                }
                 return;
             }
 
             try
             {
                 method.Invoke(manager, new object[] { spot });
+                if (InternalDebugConfig.DebugAbilityInputFlow
+                    && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                    && LogLimiter.Allow("AbilityFlow.InvokeOk", 0.15f))
+                {
+                    Log.LogInfo($"{ModuleTag} Invoke ok: {method.Name} spotAbility={(spot.CurrentAbility?.GetType().Name ?? "none")}.");
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore reflection failures
+                if (InternalDebugConfig.DebugAbilityInputFlow
+                    && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                    && LogLimiter.Allow("AbilityFlow.InvokeFail", 0.25f))
+                {
+                    var root = ex;
+                    if (ex is TargetInvocationException tie && tie.InnerException != null)
+                    {
+                        root = tie.InnerException;
+                    }
+
+                    var target = root.TargetSite != null
+                        ? $"{root.TargetSite.DeclaringType?.FullName}.{root.TargetSite.Name}"
+                        : "unknown";
+                    var stack = string.IsNullOrEmpty(root.StackTrace) ? "none" : root.StackTrace;
+                    Log.LogInfo(
+                        $"{ModuleTag} Invoke fail: {method.Name} " +
+                        $"wrapper={ex.GetType().Name}: {ex.Message} " +
+                        $"root={root.GetType().Name}: {root.Message} target={target} stack={stack}");
+                }
             }
         }
 
@@ -625,7 +1227,89 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private void OnDestroy()
         {
+            foreach (var key in CustomInputActions.Keys.ToArray())
+            {
+                DisposeCustomInputAction(key);
+            }
+
             _instance = null;
+        }
+
+        private static void DisposeCustomInputAction(InputKey key)
+        {
+            if (!CustomInputActions.TryGetValue(key, out var existing))
+            {
+                return;
+            }
+
+            try
+            {
+                existing.Action.Disable();
+                existing.Action.Dispose();
+            }
+            catch
+            {
+            }
+
+            CustomInputActions.Remove(key);
+        }
+
+        private static void LogInputFlow(string key, string message, float interval = 0.5f)
+        {
+            if (!ShouldLogAbilityFlow($"AbilityFlow.{key}", interval))
+            {
+                return;
+            }
+
+            Log.LogInfo($"{ModuleTag} {message}");
+        }
+
+        private static void LogCoreFlow(string key, string message, float interval = 0.5f)
+        {
+            if (!ShouldLogAbilityFlow($"AbilityFlow.{key}", interval))
+            {
+                return;
+            }
+
+            Log.LogInfo($"{ModuleTag} {message}");
+        }
+
+        internal static bool IsDebugBurstLoggingActive()
+        {
+            return IsDebugBurstActive();
+        }
+
+        private static bool IsDebugBurstActive()
+        {
+            return InternalDebugConfig.DebugAbilityInputFlow
+                && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                && Time.realtimeSinceStartup <= s_debugBurstUntilTime;
+        }
+
+        private static bool ShouldLogAbilityFlow(string key, float interval)
+        {
+            return IsDebugBurstActive() && LogLimiter.Allow(key, interval);
+        }
+
+        private static bool IsAbilityRuntimeContextActive()
+        {
+            // Ability input must stay available while spectating DHH head context, even when
+            // some runtime flags are temporarily desynced across vanilla/DHH states.
+            var active = SpectateHeadBridge.IsDhhRuntimeInputContextActive()
+                || SpectateHeadBridge.IsLocalDeathHeadTriggered()
+                || SpectateHeadBridge.IsSpectatingHead();
+            if (active)
+            {
+                EnsureAttachedRuntime();
+            }
+
+            return active;
+        }
+
+        private static int GetDirectionSlotIndex()
+        {
+            var configuredSlot = Mathf.Clamp(FeatureFlags.AbilityDirectionSlot, 2, SlotCount);
+            return configuredSlot - 1;
         }
     }
 }
