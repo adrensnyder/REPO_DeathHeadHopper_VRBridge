@@ -1041,15 +1041,17 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
         {
             var gripPressed = SpectateHeadBridge.IsGripPressedForAbility();
             VanillaAbilityInputBridge.NotifyDirectionBindingAttempt(key, gripPressed);
+            var hasConfiguredDirectionKey = VanillaAbilityInputBridge.TryGetConfiguredDirectionInputKey(out var configuredDirectionKey);
+            var suppressionDebugState = VanillaAbilityInputBridge.GetDirectionSuppressionDebugState(key);
             if (InternalDebugConfig.DebugAbilityInputFlow
                 && SpectateHeadBridge.IsLocalDeathHeadTriggered()
                 && gripPressed
                 && VanillaAbilityInputBridge.IsDebugBurstLoggingActive()
-                && VanillaAbilityInputBridge.TryGetConfiguredDirectionInputKey(out var configuredKey)
-                && key == configuredKey
+                && hasConfiguredDirectionKey
+                && key == configuredDirectionKey
                 && LogLimiter.Allow("AbilityFlow.InputDownObserved", 0.2f))
             {
-                DHHInputBridge.Log.LogInfo($"{DHHInputBridge.ModuleTag} InputDown observed for configured direction binding key. grip={gripPressed} {VanillaAbilityInputBridge.GetDirectionSuppressionDebugState(key)}");
+                DHHInputBridge.Log.LogInfo($"{DHHInputBridge.ModuleTag} InputDown observed for configured direction binding key. grip={gripPressed} {suppressionDebugState}");
             }
 
             if (VanillaAbilityInputBridge.ShouldSuppressDirectionBindingInputDownThisFrame(key))

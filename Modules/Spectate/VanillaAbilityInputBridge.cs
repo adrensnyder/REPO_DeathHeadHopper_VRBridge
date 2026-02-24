@@ -520,7 +520,7 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         internal static void NotifyDirectionBindingAttempt(InputKey key, bool gripPressed)
         {
-            if (!InternalDebugConfig.DebugAbilityInputFlow || !SpectateHeadBridge.IsLocalDeathHeadTriggered())
+            if (!SpectateHeadBridge.IsLocalDeathHeadTriggered())
             {
                 return;
             }
@@ -536,7 +536,8 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
             }
 
             s_debugBurstUntilTime = Time.realtimeSinceStartup + 2f;
-            if (LogLimiter.Allow("AbilityFlow.BurstStart", 0.2f))
+            if (InternalDebugConfig.DebugAbilityInputFlow
+                && LogLimiter.Allow("AbilityFlow.BurstStart", 0.2f))
             {
                 Log.LogInfo($"{ModuleTag} Debug burst armed for 2.0s on grip+{key}.");
             }
@@ -1281,14 +1282,15 @@ namespace DeathHeadHopperVRBridge.Modules.Spectate
 
         private static bool IsDebugBurstActive()
         {
-            return InternalDebugConfig.DebugAbilityInputFlow
-                && SpectateHeadBridge.IsLocalDeathHeadTriggered()
+            return SpectateHeadBridge.IsLocalDeathHeadTriggered()
                 && Time.realtimeSinceStartup <= s_debugBurstUntilTime;
         }
 
         private static bool ShouldLogAbilityFlow(string key, float interval)
         {
-            return IsDebugBurstActive() && LogLimiter.Allow(key, interval);
+            return InternalDebugConfig.DebugAbilityInputFlow
+                && IsDebugBurstActive()
+                && LogLimiter.Allow(key, interval);
         }
 
         private static bool IsAbilityRuntimeContextActive()
