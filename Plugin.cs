@@ -14,6 +14,7 @@ namespace DeathHeadHopperVRBridge
     /// <summary>Bootstraps the bridge by initializing configuration and Harmony patches.</summary>
     [BepInDependency("Cronchy.DeathHeadHopper")]
     [BepInDependency("AdrenSnyder.DeathHeadHopperFix")]
+    [BepInDependency("AdrenSnyder.DHHFLastChanceMode", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency("io.daxcess.repoxr")]
     [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.1")]
     public sealed class Plugin : BaseUnityPlugin
@@ -63,16 +64,16 @@ namespace DeathHeadHopperVRBridge
                     yield break;
                 }
 
-                if (LastChanceCameraAimCompatPatch.TryApply(harmony))
+                if (!Chainloader.PluginInfos.ContainsKey(LastChancePluginGuid))
                 {
-                    Logger.LogInfo("[LastChanceCompat] camera-force patch applied.");
+                    Logger.LogInfo("[LastChanceCompat] optional plugin not found. LastChance compat patches remain dormant.");
                     _lastChanceCompatRoutine = null;
                     yield break;
                 }
 
-                if (Chainloader.PluginInfos.ContainsKey(LastChancePluginGuid))
+                if (LastChanceCameraAimCompatPatch.TryApply(harmony))
                 {
-                    Logger.LogWarning("[LastChanceCompat] plugin detected but patch target was not found. Keeping compat dormant.");
+                    Logger.LogInfo("[LastChanceCompat] camera-force patch applied.");
                     _lastChanceCompatRoutine = null;
                     yield break;
                 }
@@ -83,7 +84,7 @@ namespace DeathHeadHopperVRBridge
                     continue;
                 }
 
-                Logger.LogInfo("[LastChanceCompat] optional plugin not found. LastChance compat patches remain dormant.");
+                Logger.LogWarning("[LastChanceCompat] plugin detected but patch target was not found. Keeping compat dormant.");
                 _lastChanceCompatRoutine = null;
             }
         }

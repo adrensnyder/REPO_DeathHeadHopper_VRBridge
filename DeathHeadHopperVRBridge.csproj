@@ -107,6 +107,13 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<Reference Include="DHHFLastChanceMode" Condition="Exists('..\REPO_DHHFLastChanceMode\bin\Debug\DHHFLastChanceMode-publicized.dll')">
+			<HintPath>..\REPO_DHHFLastChanceMode\bin\Debug\DHHFLastChanceMode-publicized.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
 		<PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
 		<PackageReference Include="System.Memory" Version="4.5.5" />
