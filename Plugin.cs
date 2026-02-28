@@ -16,7 +16,7 @@ namespace DeathHeadHopperVRBridge
     [BepInDependency("AdrenSnyder.DeathHeadHopperFix")]
     [BepInDependency("AdrenSnyder.DHHFLastChanceMode", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency("io.daxcess.repoxr")]
-    [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.1")]
+    [BepInPlugin("AdrenSnyder.DeathHeadHopperVRBridge", "Death Head Hopper - VRBridge", "0.1.2")]
     public sealed class Plugin : BaseUnityPlugin
     {
         private const string BuildStamp = "C13-ability-pipeline-probe";
